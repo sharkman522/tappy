@@ -20,6 +20,15 @@ export default function MapWeb({
   currentStopIndex,
   destinationStopIndex,
 }: MapWebProps) {
+  // Create a ref for the ScrollView
+  const scrollViewRef = React.useRef<ScrollView>(null);
+  // Create refs for each stop item to measure their positions
+  const stopRefs = React.useRef<Array<View | null>>([]);
+  
+  // Initialize the refs array based on the number of stops
+  React.useEffect(() => {
+    stopRefs.current = Array(stops.length).fill(null);
+  }, [stops.length]);
   // Determine which stops are passed, current, next, or upcoming
   const getStopStatus = (index: number) => {
     if (index < currentStopIndex) return 'passed';
@@ -43,10 +52,42 @@ export default function MapWeb({
     ? (currentStopIndex / (stops.length - 1)) * 100 
     : 0;
 
+  // Scroll to the current stop when currentStopIndex changes
+  React.useEffect(() => {
+    // Ensure we have a valid index and the ScrollView is available
+    if (currentStopIndex >= 0 && currentStopIndex < stops.length && scrollViewRef.current) {
+      // Use a timeout to ensure the view has been laid out
+      setTimeout(() => {
+        // Get the current stop ref
+        const currentStopRef = stopRefs.current[currentStopIndex];
+        
+        // If we have a reference to the current stop view, scroll to it
+        if (currentStopRef) {
+          // Find the y-position of the current stop in the scrollview
+          currentStopRef.measureLayout(
+            // @ts-ignore - This is a valid call but TypeScript doesn't recognize it
+            scrollViewRef.current,
+            (_, y) => {
+              // Scroll to position with offset to center it
+              scrollViewRef.current?.scrollTo({
+                y: Math.max(0, y - 150), // Center in view with some offset
+                animated: true,
+              });
+            },
+            () => console.log('Failed to measure layout')
+          );
+        }
+      }, 100);
+    }
+  }, [currentStopIndex, stops.length]);
+
   return (
     <View style={styles.container}>
       {/* Visual Route Map */}
-      <ScrollView style={styles.scrollView}>
+      <ScrollView 
+        ref={scrollViewRef}
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollViewContent}>
         <View style={styles.routeMapContainer}>
           {/* Route Type Indicator */}
           <View style={styles.routeTypeContainer}>
@@ -66,7 +107,10 @@ export default function MapWeb({
               const isCurrent = index === currentStopIndex;
               
               return (
-                <View key={stop.id} style={styles.stopItem}>
+                <View 
+                  key={stop.id} 
+                  style={styles.stopItem}
+                  ref={ref => stopRefs.current[index] = ref}>
                   {/* Connector line */}
                   {index > 0 && (
                     <View 
@@ -171,6 +215,10 @@ const styles = StyleSheet.create({
   scrollView: {
     flex: 1,
     marginBottom: 100, // Space for the progress bar
+  },
+  scrollViewContent: {
+    paddingTop: 20,
+    paddingBottom: 20,
   },
   routeMapContainer: {
     padding: 20,

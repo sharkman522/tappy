@@ -20,7 +20,7 @@ export default function JourneyTrackingScreen() {
   const [journeyStatus, setJourneyStatus] = useState('Starting your journey...');
   const [tappyState, setTappyState] = useState<'sleeping' | 'happy' | 'alert'>('sleeping');
   const [isAlarmTriggered, setIsAlarmTriggered] = useState(false);
-  const [testMode, setTestMode] = useState(true); // Default to test mode
+  // Test mode completely removed as requested
   const [locationPermission, setLocationPermission] = useState(true);
   const [gpsError, setGpsError] = useState(false);
 
@@ -51,37 +51,11 @@ export default function JourneyTrackingScreen() {
     };
   }, []);
   
-  // Toggle test mode when stops are loaded
+  // Ensure test mode is always disabled
   useEffect(() => {
     if (stops.length > 0) {
-      // Create a path from the first stop to the destination
-      const routeCoordinates = [];
-      
-      // For each pair of consecutive stops, generate points between them
-      for (let i = 0; i < stops.length - 1; i++) {
-        const start = stops[i].coordinates;
-        const end = stops[i + 1].coordinates;
-        
-        // Create 5 points between each stop
-        const segmentPoints = [];
-        for (let j = 0; j <= 5; j++) {
-          const fraction = j / 5;
-          segmentPoints.push({
-            latitude: start.latitude + fraction * (end.latitude - start.latitude),
-            longitude: start.longitude + fraction * (end.longitude - start.longitude)
-          });
-        }
-        
-        // Add all points except the last one (to avoid duplication)
-        if (i < stops.length - 2) {
-          routeCoordinates.push(...segmentPoints.slice(0, -1));
-        } else {
-          // For the last segment, include the last point
-          routeCoordinates.push(...segmentPoints);
-        }
-      }
-      
-      locationService.enableTestMode(routeCoordinates);
+      // Always disable test mode to use real GPS
+      locationService.disableTestMode();
     }
   }, [stops]);
   
@@ -93,7 +67,7 @@ export default function JourneyTrackingScreen() {
     const unsubscribe = locationService.watchLocation((location) => {
       // Check which stop we're closest to
       if (stops.length > 0) {
-        // Simple distance calculation (not actual road distance)
+        // Calculate distances to all stops
         const distances = stops.map(stop => {
           const dx = location.latitude - stop.coordinates.latitude;
           const dy = location.longitude - stop.coordinates.longitude;
@@ -103,31 +77,75 @@ export default function JourneyTrackingScreen() {
         // Find closest stop
         const closestStopIndex = distances.indexOf(Math.min(...distances));
         
+        // Calculate distance to next stop (in meters)
+        const nextStopIndex = Math.min(closestStopIndex + 1, stops.length - 1);
+        const distanceToNextStop = calculateDistance(
+          location.latitude,
+          location.longitude,
+          stops[nextStopIndex].coordinates.latitude,
+          stops[nextStopIndex].coordinates.longitude
+        );
+        
+        // Calculate distance to destination stop (in meters)
+        const distanceToDestination = calculateDistance(
+          location.latitude,
+          location.longitude,
+          stops[destinationIndex].coordinates.latitude,
+          stops[destinationIndex].coordinates.longitude
+        );
+        
         // Update current stop if it's changed
         if (closestStopIndex !== currentStopIndex) {
           setCurrentStopIndex(closestStopIndex);
         }
+        
+        // Update journey status based on distance to next stop and destination
+        updateJourneyStatus(closestStopIndex, distanceToNextStop, distanceToDestination);
       }
     });
     
-    // Simulate journey progress for testing
-    stopCheckInterval = setInterval(() => {
-      // Two stops before destination - alert that we're approaching
-      if (currentStopIndex === destinationIndex - 2) {
+    // Function to update journey status based on real distances
+    const updateJourneyStatus = (stopIndex: number, distanceToNext: number, distanceToDestination: number) => {
+      // Two stops before destination or within 500m of destination - alert that we're approaching
+      if (stopIndex === destinationIndex - 2 || (stopIndex === destinationIndex - 1 && distanceToDestination < 500)) {
         setTappyState('alert');
-        setJourneyStatus(`Two stops away from: ${stops[destinationIndex].name}! Get ready to alight!`);
+        setJourneyStatus(`${stops[destinationIndex].name} is coming up! Get ready to alight!`);
       } 
-      // At destination stop - trigger alarm
-      else if (currentStopIndex === destinationIndex && !isAlarmTriggered) {
+      // At destination stop or very close to it (within 100m) - trigger alarm
+      else if ((stopIndex === destinationIndex || distanceToDestination < 100) && !isAlarmTriggered) {
         setIsAlarmTriggered(true);
       }
       // Normal journey progress - keep Tappy sleeping
-      else if (currentStopIndex < stops.length - 1) {
+      else if (stopIndex < stops.length - 1) {
         // Always maintain sleeping state during normal journey
         setTappyState('sleeping');
-        setJourneyStatus(`Now approaching: ${stops[currentStopIndex + 1].name}`);
+        
+        // Format distance for display
+        const formattedDistance = distanceToNext < 1000 ? 
+          `${Math.round(distanceToNext)}m` : 
+          `${(distanceToNext / 1000).toFixed(1)}km`;
+          
+        setJourneyStatus(`Approaching: ${stops[stopIndex + 1].name} (${formattedDistance} away)`);
       }
-    }, 2000);
+    };
+    
+    // Haversine formula to calculate distance between two points in meters
+    const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+      const R = 6371e3; // Earth's radius in meters
+      const φ1 = lat1 * Math.PI / 180;
+      const φ2 = lat2 * Math.PI / 180;
+      const Δφ = (lat2 - lat1) * Math.PI / 180;
+      const Δλ = (lon2 - lon1) * Math.PI / 180;
+      
+      const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+                Math.cos(φ1) * Math.cos(φ2) *
+                Math.sin(Δλ/2) * Math.sin(Δλ/2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      
+      return R * c; // Distance in meters
+    };
+    
+    // Test mode simulation removed
     
     return () => {
       unsubscribe();
@@ -163,12 +181,7 @@ export default function JourneyTrackingScreen() {
     }
   }, [isAlarmTriggered, stopName]);
   
-  // For testing: advance to next stop
-  const advanceToNextStop = () => {
-    if (currentStopIndex < stops.length - 1) {
-      setCurrentStopIndex(currentStopIndex + 1);
-    }
-  };
+  // Test functionality removed
   
   if (loading) {
     return (
@@ -223,15 +236,7 @@ export default function JourneyTrackingScreen() {
           </View>
         </View>
 
-        {/* Test Controls - always visible since we're always in test mode */}
-        <View style={styles.testControlsContainer}>
-          <TouchableOpacity 
-            style={styles.testButton}
-            onPress={advanceToNextStop}
-          >
-            <Text style={styles.testButtonText}>Next Stop</Text>
-          </TouchableOpacity>
-        </View>
+        {/* Test controls removed */}
         
         {/* Map with route visualization */}
         <View style={styles.mapContainer}>
@@ -287,15 +292,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#FFFFFF',
   },
-  testModeContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  testModeLabel: {
-    color: '#FFFFFF',
-    marginRight: 5,
-    fontSize: 12,
-  },
+  // Test mode styles removed
   statusContainer: {
     backgroundColor: '#FFFFFF',
     margin: 15,
@@ -353,23 +350,7 @@ const styles = StyleSheet.create({
     marginLeft: 10,
     flex: 1,
   },
-  testControlsContainer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    padding: 10,
-    backgroundColor: '#F9FAFB',
-  },
-  testButton: {
-    backgroundColor: '#6B7280',
-    paddingHorizontal: 15,
-    paddingVertical: 8,
-    borderRadius: 20,
-  },
-  testButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '600',
-    fontSize: 14,
-  },
+  // Test control styles removed
   tappyContainer: {
     paddingVertical: 20,
     alignItems: 'center',
