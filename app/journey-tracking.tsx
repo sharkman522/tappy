@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Switch } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Switch, AppState, AppStateStatus } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, router } from 'expo-router';
 import { ArrowLeft, MapPin, TriangleAlert as AlertTriangle } from 'lucide-react-native';
+import * as Notifications from 'expo-notifications';
 
 // Components
 import TappyCharacter from '@/components/TappyCharacter';
@@ -13,6 +14,7 @@ import LoadingIndicator from '@/components/LoadingIndicator';
 // Services & Mock Data
 import { locationService } from '@/utils/locationService';
 import { useRouteStops } from '@/utils/ltaDataProvider';
+import { notificationService } from '@/utils/notificationService';
 
 export default function JourneyTrackingScreen() {
   const { routeId, routeNumber, stopId, stopName } = useLocalSearchParams();
@@ -23,6 +25,10 @@ export default function JourneyTrackingScreen() {
   // Test mode completely removed as requested
   const [locationPermission, setLocationPermission] = useState(true);
   const [gpsError, setGpsError] = useState(false);
+  const [notificationPermission, setNotificationPermission] = useState(false);
+  const appState = useRef(AppState.currentState);
+  const notificationListener = useRef<Notifications.Subscription>();
+  const responseListener = useRef<Notifications.Subscription>();
 
   // Get stops for this route from the LTA API
   const { stops, loading, error } = useRouteStops(routeNumber as string);
@@ -30,26 +36,84 @@ export default function JourneyTrackingScreen() {
   // Find destination stop index
   const destinationIndex = stops.findIndex(stop => stop.id === stopId);
   
-  // Initialize location service and test mode
+  // Initialize location service and notifications
   useEffect(() => {
-    const initLocation = async () => {
+    const initServices = async () => {
       try {
+        // Initialize location service
         await locationService.init();
         setLocationPermission(true);
         setGpsError(false);
+        
+        // Initialize notifications
+        const hasPermission = await notificationService.init();
+        setNotificationPermission(hasPermission);
+        if (!hasPermission) {
+          console.warn('Notification permissions not granted');
+        }
       } catch (error) {
         setLocationPermission(false);
-        console.error('Failed to get location permission:', error);
+        console.error('Failed to initialize services:', error);
       }
     };
     
-    initLocation();
+    initServices();
+    
+    // Set up notification listeners
+    notificationListener.current = notificationService.addNotificationReceivedListener(
+      notification => {
+        console.log('Notification received:', notification);
+      }
+    );
+    
+    responseListener.current = notificationService.addNotificationResponseReceivedListener(
+      response => {
+        const data = response.notification.request.content.data as { stopName?: string };
+        if (data.stopName) {
+          // User tapped on notification - navigate to alarm screen
+          router.push({
+            pathname: '/alarm',
+            params: { stopName: data.stopName }
+          });
+        }
+      }
+    );
+    
+    // Monitor app state changes
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
     
     // Cleanup
     return () => {
       locationService.disableTestMode();
+      notificationService.cancelAllNotifications();
+      if (notificationListener.current) {
+        Notifications.removeNotificationSubscription(notificationListener.current);
+      }
+      if (responseListener.current) {
+        Notifications.removeNotificationSubscription(responseListener.current);
+      }
+      subscription.remove();
     };
   }, []);
+  
+  // Handle app state changes (foreground/background)
+  const handleAppStateChange = (nextAppState: AppStateStatus) => {
+    if (appState.current === 'active' && nextAppState.match(/inactive|background/)) {
+      console.log('App has gone to background');
+      // App is going to background - make sure notifications are ready
+      if (notificationPermission && !isAlarmTriggered) {
+        // Schedule an approaching notification if we're close to destination
+        if (currentStopIndex === destinationIndex - 1) {
+          notificationService.scheduleApproachingNotification(
+            stops[destinationIndex].name,
+            60 // 1 minute
+          );
+        }
+      }
+    }
+    
+    appState.current = nextAppState;
+  };
   
   // Ensure test mode is always disabled
   useEffect(() => {
@@ -113,6 +177,10 @@ export default function JourneyTrackingScreen() {
       } 
       // At destination stop or very close to it (within 100m) - trigger alarm
       else if ((stopIndex === destinationIndex || distanceToDestination < 100) && !isAlarmTriggered) {
+        // Trigger alarm with notification
+        if (notificationPermission) {
+          notificationService.scheduleAlarmNotification(stops[destinationIndex].name);
+        }
         setIsAlarmTriggered(true);
       }
       // Normal journey progress - keep Tappy sleeping
@@ -174,10 +242,14 @@ export default function JourneyTrackingScreen() {
   // Handle alarm activation (navigate to alarm screen)
   useEffect(() => {
     if (isAlarmTriggered) {
-      router.push({
-        pathname: '/alarm',
-        params: { stopName }
-      });
+      // If app is in foreground, navigate to alarm screen
+      if (appState.current === 'active') {
+        router.push({
+          pathname: '/alarm',
+          params: { stopName }
+        });
+      }
+      // If in background, notification will handle it when tapped
     }
   }, [isAlarmTriggered, stopName]);
   

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Vibration } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { CircleCheck as CheckCircle2, Bell } from 'lucide-react-native';
+import { Audio } from 'expo-av';
 
 // Components
 import TappyCharacter from '@/components/TappyCharacter';
@@ -10,21 +11,54 @@ import TappyButton from '@/components/TappyButton';
 export default function AlarmScreen() {
   const { stopName } = useLocalSearchParams();
   const [dismissing, setDismissing] = useState(false);
+  const [sound, setSound] = useState<Audio.Sound | null>(null);
   
-  // Vibration pattern for alarm
+  // Load and play alarm sound
   useEffect(() => {
+    let isMounted = true;
+    
+    const loadSound = async () => {
+      try {
+        // Load the sound file
+        const { sound } = await Audio.Sound.createAsync(
+          require('../assets/sounds/alarm.mp3'),
+          { shouldPlay: true, isLooping: true, volume: 1.0 }
+        );
+        
+        if (isMounted) {
+          setSound(sound);
+        }
+      } catch (error) {
+        console.error('Failed to load sound', error);
+      }
+    };
+    
+    loadSound();
+    
     // Vibrate with pattern: 500ms on, 500ms off, repeat
     const pattern = [0, 500, 500];
     Vibration.vibrate(pattern, true);
     
-    // Clean up vibration when component unmounts
-    return () => Vibration.cancel();
+    // Clean up when component unmounts
+    return () => {
+      isMounted = false;
+      Vibration.cancel();
+      if (sound) {
+        sound.stopAsync();
+        sound.unloadAsync();
+      }
+    };
   }, []);
   
   // Handle dismiss alarm
   const handleDismiss = () => {
     Vibration.cancel();
     setDismissing(true);
+    
+    // Stop the sound
+    if (sound) {
+      sound.stopAsync();
+    }
     
     setTimeout(() => {
       router.push({
