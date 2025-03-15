@@ -2,6 +2,9 @@ import React, { useEffect, useRef } from 'react';
 import { View, StyleSheet, Animated, Easing, Platform } from 'react-native';
 import LottieView from 'lottie-react-native';
 
+// Import the custom SleepingTappy component
+import SleepingTappy from './SleepingTappy';
+
 // Import the Lottie animation file
 import tappyData from '../assets/images/tappy.json';
 
@@ -204,16 +207,26 @@ export default function TappyCharacter({
         { width: tappySize, height: tappySize },
         getAnimationStyle()
       ]}>
-        <LottieView
-          ref={lottieRef}
-          source={tappyData}
-          style={styles.lottieView}
-          autoPlay={expression === 'alert'} // Auto play for alert expression
-          loop={expression === 'sleeping' || expression === 'alert' || animationType !== 'none'}
-          resizeMode="contain"
-          // On web, we need to specify renderer type
-          {...(Platform.OS === 'web' ? { renderer: 'svg' } : {})}
-        />
+        {expression === 'sleeping' ? (
+          // Use the custom SleepingTappy component when expression is sleeping
+          <SleepingTappy 
+            width={tappySize} 
+            height={tappySize} 
+            style={styles.lottieView} 
+          />
+        ) : (
+          // Use Lottie animation for all other expressions
+          <LottieView
+            ref={lottieRef}
+            source={tappyData}
+            style={styles.lottieView}
+            autoPlay={expression === 'alert'} // Auto play for alert expression
+            loop={expression === 'alert' || animationType !== 'none'}
+            resizeMode="contain"
+            // On web, we need to specify renderer type
+            {...(Platform.OS === 'web' ? { renderer: 'svg' } : {})}
+          />
+        )}
       </Animated.View>
     </View>
   );
