@@ -37,10 +37,61 @@ export default function JourneyTrackingScreen() {
   const destinationIndex = stops.findIndex(stop => stop.id === stopId);
   
   // Find the user's starting stop index (the stop they're currently at)
-  const [startingStopIndex, setStartingStopIndex] = useState(0);
+  const [startingStopIndex, setStartingStopIndex] = useState(-1); // Set to -1 to indicate it hasn't been determined yet
   
-  // Initialize location service and notifications
+  // Haversine formula to calculate distance between two points in meters
+  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+    const R = 6371e3; // Earth's radius in meters
+    const φ1 = lat1 * Math.PI / 180;
+    const φ2 = lat2 * Math.PI / 180;
+    const Δφ = (lat2 - lat1) * Math.PI / 180;
+    const Δλ = (lon2 - lon1) * Math.PI / 180;
+    
+    const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+              Math.cos(φ1) * Math.cos(φ2) *
+              Math.sin(Δλ/2) * Math.sin(Δλ/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    
+    return R * c; // Distance in meters
+  };
+
+  // Initialize location service and find closest stop to user
   useEffect(() => {
+    // Function to find the closest stop to the user's current location
+    const findClosestStop = async () => {
+      if (stops.length === 0) return;
+      
+      try {
+        // Get user's current location
+        const userLocation = await locationService.getCurrentLocation();
+        console.log('[JourneyTracking] User location:', userLocation);
+        
+        // Calculate distances to all stops
+        const distances = stops.map(stop => {
+          return calculateDistance(
+            userLocation.latitude,
+            userLocation.longitude,
+            stop.coordinates.latitude,
+            stop.coordinates.longitude
+          );
+        });
+        
+        // Find the closest stop
+        const closestStopIndex = distances.indexOf(Math.min(...distances));
+        console.log('[JourneyTracking] Closest stop index:', closestStopIndex, 'Name:', stops[closestStopIndex]?.name);
+        
+        // Only set if we haven't already determined it
+        if (startingStopIndex === -1) {
+          setStartingStopIndex(closestStopIndex);
+          setCurrentStopIndex(closestStopIndex);
+        }
+      } catch (error) {
+        console.error('[JourneyTracking] Error finding closest stop:', error);
+      }
+    };
+    
+    // Initialize location service and notifications
+  
     const initServices = async () => {
       try {
         // Initialize location service
@@ -61,6 +112,11 @@ export default function JourneyTrackingScreen() {
     };
     
     initServices();
+    
+    // Find the closest stop to the user after services are initialized
+    if (stops.length > 0 && startingStopIndex === -1) {
+      findClosestStop();
+    }
     
     // Set up notification listeners
     notificationListener.current = notificationService.addNotificationReceivedListener(
@@ -97,7 +153,7 @@ export default function JourneyTrackingScreen() {
       }
       subscription.remove();
     };
-  }, []);
+  }, [stops, startingStopIndex]);
   
   // Handle app state changes (foreground/background)
   const handleAppStateChange = (nextAppState: AppStateStatus) => {
@@ -144,9 +200,12 @@ export default function JourneyTrackingScreen() {
         // Find closest stop
         const closestStopIndex = distances.indexOf(Math.min(...distances));
         
-        // If this is the first location update, set the starting stop index
-        if (currentStopIndex === 0 && startingStopIndex === 0) {
-          setStartingStopIndex(closestStopIndex);
+        // Only update current stop index if we've already determined the starting point
+        if (startingStopIndex !== -1) {
+          // Don't go backward in the route - only move forward
+          if (closestStopIndex > currentStopIndex) {
+            setCurrentStopIndex(closestStopIndex);
+          }
         }
         
         // Calculate distance to next stop (in meters)

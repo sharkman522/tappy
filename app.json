@@ -16,7 +16,7 @@
           "icon": "./assets/images/notification-icon.png",
           "color": "#FF8A65",
           "sounds": [
-            "./assets/sounds/alarm.mp3"
+            "./assets/sounds/alarm.aac"
           ]
         }
       ]

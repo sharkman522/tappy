@@ -112,7 +112,8 @@ export const ltaApi = {
         }
         
         // Safety check to prevent infinite loops
-        if (currentSkip > 1000000) {
+        // Set the limit to match the expected total data size of 5975570
+        if (currentSkip >= 12000) {
           hasMoreData = false;
         }
       }

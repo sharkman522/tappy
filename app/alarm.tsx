@@ -21,7 +21,7 @@ export default function AlarmScreen() {
       try {
         // Load the sound file
         const { sound } = await Audio.Sound.createAsync(
-          require('../assets/sounds/alarm.mp3'),
+          require('../assets/sounds/alarm.aac'),
           { shouldPlay: true, isLooping: true, volume: 1.0 }
         );
         
