@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, StyleSheet, Text, ScrollView } from 'react-native';
-import { MapPin, Bus, Brain as Train, ArrowRight } from 'lucide-react-native';
+import { MapPin, Bus, Train, ArrowRight } from 'lucide-react-native';
 
 interface MapWebProps {
   stops: Array<{
@@ -20,8 +20,11 @@ export default function MapWeb({
   currentStopIndex,
   destinationStopIndex,
 }: MapWebProps) {
+  // Track the highest progress values to prevent reversal
+  const [highestProgress, setHighestProgress] = React.useState(0);
+  const [highestVerticalProgress, setHighestVerticalProgress] = React.useState<{[key: string]: number}>({});
   // Only show stops from the current stop to the destination
-  const visibleStops = stops.slice(currentStopIndex);
+  const visibleStops = stops.slice(currentStopIndex, destinationStopIndex + 1);
   // Create a ref for the ScrollView
   const scrollViewRef = React.useRef<ScrollView>(null);
   // Create refs for each stop item to measure their positions
@@ -52,11 +55,69 @@ export default function MapWeb({
   };
 
   // Calculate progress percentage based on the journey from current to destination
-  const progress = visibleStops.length > 1 
-    ? ((destinationStopIndex - currentStopIndex) > 0 
-        ? (0 / (destinationStopIndex - currentStopIndex)) * 100 
-        : 100) 
-    : 0;
+  const totalStopsInJourney = destinationStopIndex - currentStopIndex;
+  
+  // Calculate progress as a percentage of completed stops
+  let currentProgress = 0;
+  if (totalStopsInJourney > 0) {
+    // Calculate base progress based on completed stops
+    const completedStops = currentStopIndex - stops.indexOf(visibleStops[0]);
+    
+    // Add partial progress to next stop (0-100%)
+    // This creates the dynamic movement between stops
+    const partialProgress = Math.min(20, Math.random() * 30); // Simulate movement between stops
+    
+    // Calculate total progress percentage
+    currentProgress = ((completedStops / totalStopsInJourney) * 100) + 
+                     ((partialProgress / totalStopsInJourney));
+  } else if (currentStopIndex >= destinationStopIndex) {
+    // Already at or past destination
+    currentProgress = 100;
+  }
+  
+  // Ensure progress never decreases
+  const progress = Math.max(currentProgress, highestProgress);
+  
+  // Update highest progress if current progress is higher
+  React.useEffect(() => {
+    if (progress > highestProgress) {
+      setHighestProgress(progress);
+    }
+  }, [progress, highestProgress]);
+  
+  // Function to calculate connector progress for each segment
+  const getConnectorProgress = (stopIndex: number) => {
+    // Calculate progress for this specific connector
+    const connectorId = `connector-${stopIndex}`;
+    
+    // Base progress is proportional to overall journey progress
+    let connectorProgress = 0;
+    
+    // If we're past this connector, it's 100% filled
+    if (stopIndex < currentStopIndex - stops.indexOf(visibleStops[0])) {
+      connectorProgress = 100;
+    }
+    // If we're at the stop just before this connector, show partial progress
+    else if (stopIndex === currentStopIndex - stops.indexOf(visibleStops[0]) + 1) {
+      // Calculate partial progress based on overall progress
+      const segmentProgress = (progress % (100 / totalStopsInJourney)) * totalStopsInJourney;
+      connectorProgress = Math.min(100, segmentProgress * 2); // Amplify for better visual effect
+    }
+    
+    // Get the highest progress for this connector
+    const highest = highestVerticalProgress[connectorId] || 0;
+    
+    // Update highest progress for this connector if needed
+    if (connectorProgress > highest) {
+      setHighestVerticalProgress(prev => ({
+        ...prev,
+        [connectorId]: connectorProgress
+      }));
+      return connectorProgress;
+    }
+    
+    return highest;
+  };
 
   // Scroll to the current stop when visibleStops changes
   React.useEffect(() => {
@@ -100,7 +161,7 @@ export default function MapWeb({
             {stops[0]?.name.toLowerCase().includes('bus') ? (
               <Bus size={24} color="#4BB377" />
             ) : (
-              <Train size={24} color="#4BB377" />
+              <Bus size={24} color="#4BB377" />
             )}
           </View>
 
@@ -119,14 +180,36 @@ export default function MapWeb({
                   ref={ref => stopRefs.current[index] = ref}>
                   {/* Connector line */}
                   {index > 0 && (
-                    <View 
-                      style={[
-                        styles.connectorLine, 
-                        { 
-                          backgroundColor: '#D1D5DB' // All connectors are upcoming
-                        }
-                      ]} 
-                    />
+                    <>
+                      {/* Road-like connector with dashed center line */}
+                      <View 
+                        style={[
+                          styles.connectorLine, 
+                          { 
+                            backgroundColor: '#D1D5DB', // Base road color
+                          }
+                        ]} 
+                      />
+                      
+                      {/* Center line (dashed yellow line) */}
+                      <View 
+                        style={[
+                          styles.connectorCenterLine, 
+                        ]} 
+                      />
+                      
+                      {/* Progress fill for the connector */}
+                      <View 
+                        style={[
+                          styles.connectorProgress, 
+                          { 
+                            height: `${getConnectorProgress(index)}%`,
+                            backgroundColor: '#4BB377', // Progress color
+                            top: -25, // Start from top
+                          }
+                        ]} 
+                      />
+                    </>
                   )}
                   
                   {/* Stop Circle */}
@@ -205,7 +288,7 @@ export default function MapWeb({
           />
         </View>
         <Text style={styles.progressText}>
-          1 of {stops.length - currentStopIndex} stops
+          1 of {destinationStopIndex - currentStopIndex + 1} stops
         </Text>
       </View>
     </View>
@@ -240,18 +323,42 @@ const styles = StyleSheet.create({
   },
   stopItem: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center', // Center align items vertically
     marginBottom: 35,
     position: 'relative',
   },
   connectorLine: {
     position: 'absolute',
-    width: 3,
+    width: 8, // Wider to look like a road
     height: 40, // Height needs to match the marginBottom of stopItem plus some adjustment
     backgroundColor: '#D1D5DB',
-    left: 6, // Half of the normal stop circle width
+    left: 2, // Centered with the stop circle
     top: -25,
     zIndex: 1,
+    borderRadius: 4, // Slightly rounded edges
+  },
+  connectorCenterLine: {
+    position: 'absolute',
+    width: 2, // Thin center line
+    height: 40,
+    backgroundColor: '#FFCC00', // Yellow center line
+    left: 5, // Centered within the connector
+    top: -25,
+    zIndex: 2,
+    opacity: 0.7,
+    // Dashed effect
+    borderStyle: 'dashed',
+    borderWidth: 0.5,
+    borderColor: '#FFCC00',
+  },
+  connectorProgress: {
+    position: 'absolute',
+    width: 8, // Same as connector
+    height: '0%', // Will be dynamically set
+    backgroundColor: '#4BB377',
+    left: 2, // Same as connector
+    zIndex: 2,
+    borderRadius: 4, // Slightly rounded edges
   },
   stopCircle: {
     width: 12,
@@ -260,7 +367,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#6B7280',
     marginRight: 15,
     marginTop: 4,
-    zIndex: 2,
+    zIndex: 3, // Higher than the connector
+    alignSelf: 'center', // Center horizontally
   },
   stopInfo: {
     flex: 1,
