@@ -97,8 +97,8 @@ export interface AppBusStop extends BusStop {
   };
   stopSequence?: number; // Sequence number of the stop in the route
   direction?: number; // Direction of the bus route
-  time?: string; // Estimated travel time
-  estimatedMinutes?: number; // Raw minutes value for the estimated time
+  time?: string; // Display information about the stop (e.g., "Next stop", "2 stops away")
+  stopsAway?: number; // Number of stops away from the current stop
   isPassed?: boolean; // Whether this stop has already been passed by the bus
 }
 

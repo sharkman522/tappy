@@ -14,6 +14,7 @@ import LoadingIndicator from '@/components/LoadingIndicator';
 // Context and Hooks
 import { useLTA } from '@/app/LTAApiContext';
 import { useRouteStops, useBusArrivals } from '@/utils/ltaDataProvider';
+import { locationService } from '@/utils/locationService';
 
 // Helper function to get color based on train line
 const getLineColor = (line: string): string => {
@@ -63,6 +64,8 @@ export default function RouteDetailsScreen() {
   const [selectedStop, setSelectedStop] = useState<string | null>(null);
   const [tappyMessage, setTappyMessage] = useState("Which stop would you like to travel to?");
   const [tappyAnimating, setTappyAnimating] = useState(false);
+  const [closestStopIndex, setClosestStopIndex] = useState<number>(-1);
+  const [isLoadingLocation, setIsLoadingLocation] = useState(false);
   
   // Get LTA context data
   const { favorites, toggleFavorite } = useLTA();
@@ -78,6 +81,59 @@ export default function RouteDetailsScreen() {
   const { stops, loading, error, directions, selectedDirection, changeDirection, allStops } = useRouteStops(
     contentType === 'bus' ? (serviceNumber as string || '') : ''
   );
+  
+  // Find the closest stop to the user's current location
+  useEffect(() => {
+    if (contentType !== 'bus' || stops.length === 0) return;
+    
+    const findClosestStop = async () => {
+      setIsLoadingLocation(true);
+      try {
+        // Get user's current location
+        const userLocation = await locationService.getCurrentLocation();
+        console.log('[RouteDetailsScreen] User location:', userLocation);
+        
+        // Calculate distances to all stops
+        const distances = stops.map(stop => {
+          return calculateDistance(
+            userLocation.latitude,
+            userLocation.longitude,
+            stop.coordinates.latitude,
+            stop.coordinates.longitude
+          );
+        });
+        
+        // Find the closest stop
+        const closestIndex = distances.indexOf(Math.min(...distances));
+        console.log('[RouteDetailsScreen] Closest stop index:', closestIndex, 'Name:', stops[closestIndex]?.name);
+        
+        setClosestStopIndex(closestIndex);
+        setTappyMessage(`Where would you like to go?`);
+      } catch (error) {
+        console.error('[RouteDetailsScreen] Error finding closest stop:', error);
+      } finally {
+        setIsLoadingLocation(false);
+      }
+    };
+    
+    findClosestStop();
+  }, [stops, contentType]);
+  
+  // Haversine formula to calculate distance between two points in meters
+  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+    const R = 6371e3; // Earth's radius in meters
+    const φ1 = lat1 * Math.PI / 180;
+    const φ2 = lat2 * Math.PI / 180;
+    const Δφ = (lat2 - lat1) * Math.PI / 180;
+    const Δλ = (lon2 - lon1) * Math.PI / 180;
+    
+    const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+              Math.cos(φ1) * Math.cos(φ2) *
+              Math.sin(Δλ/2) * Math.sin(Δλ/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    
+    return R * c; // Distance in meters
+  };
   console.log('[RouteDetailsScreen] useRouteStops result:', { 
     stopsCount: stops?.length, 
     loading, 
@@ -127,8 +183,11 @@ export default function RouteDetailsScreen() {
     }, 1500);
   };
   
+  // We no longer need this function since we're hiding stops that are behind the user
+  // Instead of showing an error message
+  
   // Start journey with selected stop
-  const startJourney = () => {
+  const startJourney = async () => {
     if (!selectedStop) {
       setTappyMessage("Please select a stop first!");
       setTappyAnimating(true);
@@ -144,16 +203,39 @@ export default function RouteDetailsScreen() {
       return;
     }
     
-    // Navigate to journey screen
-    router.push({
-      pathname: '/journey-tracking',
-      params: { 
-        routeId: routeId as string, 
-        routeNumber: routeNumber as string, 
-        stopId: selectedStop,
-        stopName: selectedStopDetails.name
-      }
-    });
+    // Set loading state while getting location
+    setTappyMessage("Finding the nearest stop to start your journey...");
+    
+    try {
+      // Get user's current location
+      const userLocation = await locationService.getCurrentLocation();
+      console.log('[RouteDetailsScreen] User location for journey:', userLocation);
+      
+      // Navigate to journey screen with user's location
+      router.push({
+        pathname: '/journey-tracking',
+        params: { 
+          routeId: routeId as string, 
+          routeNumber: routeNumber as string, 
+          stopId: selectedStop,
+          stopName: selectedStopDetails.name,
+          userLat: userLocation.latitude.toString(),
+          userLng: userLocation.longitude.toString()
+        }
+      });
+    } catch (error) {
+      console.error('[RouteDetailsScreen] Error getting location:', error);
+      // Fall back to regular navigation without location
+      router.push({
+        pathname: '/journey-tracking',
+        params: { 
+          routeId: routeId as string, 
+          routeNumber: routeNumber as string, 
+          stopId: selectedStop,
+          stopName: selectedStopDetails.name
+        }
+      });
+    }
   };
   
   // Toggle favorite status
@@ -261,23 +343,23 @@ export default function RouteDetailsScreen() {
             
             {/* Past Stops Toggle */}
             {contentType === 'bus' && allStops && allStops.some(stop => stop.isPassed) && (
-              <View style={styles.pastStopsToggle}>
+              <View style={styles.sectionHeader}>
                 <TouchableOpacity 
-                  style={styles.toggleButton}
+                  style={styles.directionButton}
                   onPress={() => setShowPastStops(!showPastStops)}
                 >
-                  <Text style={styles.toggleButtonText}>
+                  <Text style={styles.directionButtonText}>
                     {showPastStops ? 'Hide Past Stops' : 'Show Past Stops'}
                   </Text>
                 </TouchableOpacity>
-                <Text style={styles.toggleHint}>
+                <Text style={styles.sectionSubtitle}>
                   {showPastStops ? 'Showing all stops' : 'Showing upcoming stops only'}
                 </Text>
               </View>
             )}
             
-            {loading ? (
-              <LoadingIndicator message="Loading stops..." />
+            {isLoadingLocation || loading ? (
+              <LoadingIndicator message={isLoadingLocation ? "Finding closest stop..." : "Loading stops..."} />
             ) : error ? (
               <Text style={styles.errorText}>
                 {error}
@@ -285,16 +367,29 @@ export default function RouteDetailsScreen() {
               </Text>
             ) : stops.length > 0 || (allStops && allStops.length > 0) ? (
               // Show either filtered stops (future only) or all stops based on toggle
-              (showPastStops && allStops ? allStops : stops).map((stop, index) => (
-                <StopCard
-                  key={`${stop.id}-${stop.stopSequence || index}`}
-                  stopName={stop.name}
-                  estimatedTime={stop.time}
-                  isDestination={stop.id === selectedStop}
-                  isPast={stop.isPassed}
-                  onPress={() => handleStopSelect(stop.id, stop.name)}
-                />
-              ))
+              // Only show stops that come after the closest stop to the user's current location
+              (showPastStops && allStops ? allStops : stops)
+                .filter((stop, index) => closestStopIndex === -1 || index > closestStopIndex)
+                .map((stop, index, filteredArray) => {
+                  // Recalculate the stops away based only on the visible stops
+                  let displayTime = stop.time;
+                  
+                  // If it's not a passed stop, recalculate the stops away
+                  if (!stop.isPassed) {
+                    const stopsAway = index + 1; // +1 because index is 0-based
+                    displayTime = stopsAway === 1 ? '1 stop away' : `${stopsAway} stops away`;
+                  }
+                  
+                  return (
+                    <StopCard
+                      key={`${stop.id}-${stop.stopSequence || index}`}
+                      stopName={stop.name}
+                      estimatedTime={displayTime}
+                      isDestination={stop.id === selectedStop}
+                      onPress={() => handleStopSelect(stop.id, stop.name)}
+                    />
+                  );
+                })
             ) : (
               <Text style={styles.emptyText}>No stops available for this route.</Text>
             )}
@@ -621,5 +716,18 @@ const styles = StyleSheet.create({
   selectedDirectionButtonText: {
     color: '#FFFFFF',
     fontWeight: '500',
+  },
+  sectionHeader: {
+    backgroundColor: '#F3F4F6',
+    borderRadius: 8,
+    padding: 12,
+    marginVertical: 8,
+    marginHorizontal: 15,
+  },
+  sectionSubtitle: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 4,
+    fontStyle: 'italic',
   },
 });

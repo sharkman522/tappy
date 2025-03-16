@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated } from 'react-native';
-import { ChevronRight, Bus, Brain as Train, Heart } from 'lucide-react-native';
+import { ChevronRight, Bus, Train, Heart } from 'lucide-react-native';
 
 interface RouteCardProps {
   type: 'bus' | 'train';

@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, SectionList } from 'react-native';
-import { Map, Bus, Brain as Train, X, MapPin } from 'lucide-react-native';
+import { Map, Bus, Train, X, MapPin } from 'lucide-react-native';
 import { SearchResults } from '../types/lta-api';
 import RouteCard from './RouteCard';
 

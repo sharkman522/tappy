@@ -298,11 +298,22 @@ export const useRouteStops = (routeNumber: string, direction: number = 1) => {
               const passedStopsCount = Math.floor(totalStops * 0.3); // 30% of stops have been passed
               
               // Calculate estimated time (simulated)
-              // Stops that have been passed will have negative minutes
-              const estimatedMinutes = index < passedStopsCount ? -((passedStopsCount - index) * 2) : (index - passedStopsCount) * 2;
+              // Instead of using fixed 2-minute intervals, calculate distance-based information
+              const isPassed = index < passedStopsCount;
               
-              // Format the time string
-              const timeString = estimatedMinutes < 0 ? `Passed ${Math.abs(estimatedMinutes)} mins ago` : `${estimatedMinutes} mins`;
+              // Format the distance-based information instead of time
+              let stopInfo = '';
+              if (isPassed) {
+                stopInfo = 'Passed';
+              } else if (index === passedStopsCount) {
+                stopInfo = 'Current stop';
+              } else {
+                // For upcoming stops, show the stop number
+                // We'll calculate this differently when displaying in the UI
+                // to account for hidden stops
+                const stopsAway = index - passedStopsCount;
+                stopInfo = stopsAway === 1 ? 'Next stop' : `${stopsAway} stops away`;
+              }
               
               return {
                 ...stop,
@@ -312,11 +323,11 @@ export const useRouteStops = (routeNumber: string, direction: number = 1) => {
                   latitude: stop.Latitude,
                   longitude: stop.Longitude,
                 },
-                time: timeString, // Simulate travel time with passed stops indication
+                time: stopInfo, // Use the distance-based information instead of time
                 direction: route.Direction,
                 stopSequence: route.StopSequence,
-                estimatedMinutes: estimatedMinutes, // Store the raw minutes for filtering
-                isPassed: estimatedMinutes < 0 // Flag if this stop is in the past
+                stopsAway: index - passedStopsCount, // Store the raw stops away (can be negative for passed stops)
+                isPassed: isPassed // Flag if this stop is in the past
               };
             }).filter(Boolean) as AppBusStop[];
             

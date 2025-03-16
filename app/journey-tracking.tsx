@@ -17,7 +17,7 @@ import { useRouteStops } from '@/utils/ltaDataProvider';
 import { notificationService } from '@/utils/notificationService';
 
 export default function JourneyTrackingScreen() {
-  const { routeId, routeNumber, stopId, stopName } = useLocalSearchParams();
+  const { routeId, routeNumber, stopId, stopName, userLat, userLng } = useLocalSearchParams();
   const [currentStopIndex, setCurrentStopIndex] = useState(0);
   const [journeyStatus, setJourneyStatus] = useState('Starting your journey...');
   const [tappyState, setTappyState] = useState<'sleeping' | 'happy' | 'alert'>('sleeping');
@@ -62,9 +62,18 @@ export default function JourneyTrackingScreen() {
       if (stops.length === 0) return;
       
       try {
-        // Get user's current location
-        const userLocation = await locationService.getCurrentLocation();
-        console.log('[JourneyTracking] User location:', userLocation);
+        // Use passed user location from params if available, otherwise get current location
+        let userLocation;
+        if (userLat && userLng) {
+          userLocation = {
+            latitude: parseFloat(userLat as string),
+            longitude: parseFloat(userLng as string)
+          };
+          console.log('[JourneyTracking] Using passed user location:', userLocation);
+        } else {
+          userLocation = await locationService.getCurrentLocation();
+          console.log('[JourneyTracking] Using current user location:', userLocation);
+        }
         
         // Calculate distances to all stops
         const distances = stops.map(stop => {
@@ -255,12 +264,18 @@ export default function JourneyTrackingScreen() {
         // Always maintain sleeping state during normal journey
         setTappyState('sleeping');
         
+        // Calculate stops remaining - only count the stops that are actually visible to the user
+        const stopsRemaining = destinationIndex - stopIndex;
+        
         // Format distance for display
         const formattedDistance = distanceToNext < 1000 ? 
           `${Math.round(distanceToNext)}m` : 
           `${(distanceToNext / 1000).toFixed(1)}km`;
+        
+        // Use singular or plural form based on the number of stops
+        const stopText = stopsRemaining === 1 ? "1 stop away" : `${stopsRemaining} stops away`;
           
-        setJourneyStatus(`Approaching: ${stops[stopIndex + 1].name} (${formattedDistance} away)`);
+        setJourneyStatus(`Approaching: ${stops[stopIndex + 1].name} (${stopText})`);
       }
     };
     
@@ -302,7 +317,14 @@ export default function JourneyTrackingScreen() {
     } else {
       // Ensure Tappy stays sleeping during the journey
       setTappyState('sleeping');
-      setJourneyStatus(`Now approaching: ${stops[currentStopIndex+1]?.name || 'next stop'}`);
+      
+      // Calculate stops remaining - only count the stops that are actually visible to the user
+      const stopsRemaining = destinationIndex - currentStopIndex;
+      
+      // Use singular or plural form based on the number of stops
+      const stopText = stopsRemaining === 1 ? "1 stop away" : `${stopsRemaining} stops away`;
+      
+      setJourneyStatus(`Now approaching: ${stops[currentStopIndex+1]?.name || 'next stop'} (${stopText})`);
     }
   }, [currentStopIndex, isAlarmTriggered, stops, destinationIndex]);
   
