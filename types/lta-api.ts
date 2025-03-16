@@ -95,6 +95,9 @@ export interface AppBusStop extends BusStop {
     latitude: number;
     longitude: number;
   };
+  stopSequence?: number; // Sequence number of the stop in the route
+  direction?: number; // Direction of the bus route
+  time?: string; // Estimated travel time
 }
 
 export interface AppBusService {

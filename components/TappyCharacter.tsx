@@ -8,18 +8,29 @@ import SleepingTappy from './SleepingTappy';
 // Import the Lottie animation file
 import tappyData from '../assets/images/tappy.json';
 
+// For now, we're using the same animation file for all outfits
+// In a real app, you would have different animation files for each outfit
+const outfitAnimations: Record<string, any> = {
+  '1': tappyData, // Default outfit
+  '2': tappyData, // Raincoat outfit (using default for now)
+  '3': tappyData, // Bus Driver outfit (using default for now)
+  '4': tappyData, // Train Captain outfit (using default for now)
+};
+
 interface TappyCharacterProps {
   style?: object;
   expression?: 'happy' | 'sleeping' | 'alert' | 'celebration' | 'sad';
   size?: 'small' | 'medium' | 'large';
   animationType?: 'wave' | 'dance' | 'pulse' | 'none';
+  outfit?: string;
 }
 
 export default function TappyCharacter({ 
   style, 
   expression = 'happy', 
   size = 'medium',
-  animationType = 'none' 
+  animationType = 'none',
+  outfit = '1' 
 }: TappyCharacterProps) {
   // Lottie animation reference
   const lottieRef = useRef<LottieView>(null);
@@ -218,7 +229,7 @@ export default function TappyCharacter({
           // Use Lottie animation for all other expressions
           <LottieView
             ref={lottieRef}
-            source={tappyData}
+            source={outfitAnimations[outfit] || tappyData}
             style={styles.lottieView}
             autoPlay={expression === 'alert'} // Auto play for alert expression
             loop={expression === 'alert' || animationType !== 'none'}

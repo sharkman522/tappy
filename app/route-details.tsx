@@ -32,10 +32,32 @@ const getLineColor = (line: string): string => {
 export default function RouteDetailsScreen() {
   console.log('[RouteDetailsScreen] Component rendering');
   const params = useLocalSearchParams();
-  const { routeId, routeNumber, type, busStopCode, description, stationCode, stationName, line } = params;
+  const { routeId, routeNumber, type, busStopCode: paramBusStopCode, description, stationCode, stationName, line, serviceNumber } = params;
+  
+  // For bus routes, extract the bus stop code from the route ID if not provided
+  // Route ID format is "ServiceNo-BusStopCode" (e.g., "920-44339")
+  let extractedBusStopCode: string | undefined;
+  if (type === 'bus' && routeId) {
+    console.log('[RouteDetailsScreen] Extracting bus stop code from route ID:', routeId);
+    const idParts = (routeId as string).split('-');
+    console.log('[RouteDetailsScreen] ID parts after splitting:', idParts);
+    if (idParts.length > 1) {
+      extractedBusStopCode = idParts[1];
+      console.log('[RouteDetailsScreen] Extracted bus stop code:', extractedBusStopCode);
+    } else {
+      console.log('[RouteDetailsScreen] Could not extract bus stop code from route ID');
+    }
+  } else {
+    console.log('[RouteDetailsScreen] Not a bus route or no routeId provided:', { type, routeId });
+  }
+  
+  // Use the provided bus stop code or the extracted one
+  const busStopCode = paramBusStopCode || extractedBusStopCode;
+  console.log('[RouteDetailsScreen] Final bus stop code:', busStopCode);
   
   console.log('[RouteDetailsScreen] Params:', {
-    routeId, routeNumber, type, busStopCode, description, stationCode, stationName, line
+    routeId, routeNumber, type, busStopCode, description, stationCode, stationName, line, serviceNumber,
+    extractedBusStopCode
   });
   
   const [selectedStop, setSelectedStop] = useState<string | null>(null);
@@ -50,18 +72,20 @@ export default function RouteDetailsScreen() {
   console.log('[RouteDetailsScreen] Determined content type:', contentType);
   
   // Get stops for this route (only for bus routes)
-  const { stops, loading, error } = useRouteStops(
-    contentType === 'bus' ? routeNumber as string : ''
+  const { stops, loading, error, directions, selectedDirection, changeDirection } = useRouteStops(
+    contentType === 'bus' ? (serviceNumber as string || '') : ''
   );
   console.log('[RouteDetailsScreen] useRouteStops result:', { 
     stopsCount: stops?.length, 
     loading, 
-    error 
+    error,
+    directions,
+    selectedDirection
   });
   
-  // Get bus arrivals for bus stop
+  // Get bus arrivals for bus stop or bus route
   const { arrivals, loading: arrivalsLoading, error: arrivalsError } = useBusArrivals(
-    contentType === 'busStop' ? busStopCode as string : ''
+    (contentType === 'busStop' || contentType === 'bus') && busStopCode ? busStopCode as string : ''
   );
   console.log('[RouteDetailsScreen] useBusArrivals result:', { 
     arrivalsCount: arrivals?.length, 
@@ -185,6 +209,30 @@ export default function RouteDetailsScreen() {
           <View style={styles.stopsContainer}>
             <Text style={styles.sectionTitle}>Stops</Text>
             
+            {/* Direction Selector */}
+            {Object.keys(directions).length > 1 && (
+              <View style={styles.directionSelector}>
+                <Text style={styles.directionLabel}>Direction:</Text>
+                <View style={styles.directionButtonsContainer}>
+                  {Object.entries(directions).map(([dirKey, dirLabel]) => {
+                    const directionNumber = parseInt(dirKey, 10);
+                    const isSelected = directionNumber === selectedDirection;
+                    return (
+                      <TouchableOpacity
+                        key={dirKey}
+                        style={[styles.directionButton, isSelected && styles.selectedDirectionButton]}
+                        onPress={() => changeDirection(directionNumber)}
+                      >
+                        <Text style={[styles.directionButtonText, isSelected && styles.selectedDirectionButtonText]}>
+                          {dirLabel}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            )}
+            
             {loading ? (
               <LoadingIndicator message="Loading stops..." />
             ) : error ? (
@@ -193,9 +241,9 @@ export default function RouteDetailsScreen() {
                 Could not load stops for this route. Please try again later.
               </Text>
             ) : stops.length > 0 ? (
-              stops.map((stop) => (
+              stops.map((stop, index) => (
                 <StopCard
-                  key={stop.id}
+                  key={`${stop.id}-${stop.stopSequence || index}`}
                   stopName={stop.name}
                   estimatedTime={stop.time}
                   isDestination={stop.id === selectedStop}
@@ -485,5 +533,48 @@ const styles = StyleSheet.create({
   },
   rideButton: {
     width: '100%',
+  },
+  // Direction selector styles
+  directionSelector: {
+    backgroundColor: '#F3F4F6',
+    borderRadius: 8,
+    padding: 12,
+    marginVertical: 8,
+    marginHorizontal: 15,
+  },
+  directionLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#4B5563',
+    marginBottom: 8,
+  },
+  directionButtonsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  directionButton: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    marginBottom: 4,
+    flex: 1,
+    minWidth: '48%',
+  },
+  selectedDirectionButton: {
+    backgroundColor: '#4F46E5',
+    borderColor: '#4F46E5',
+  },
+  directionButtonText: {
+    fontSize: 12,
+    color: '#4B5563',
+    textAlign: 'center',
+  },
+  selectedDirectionButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '500',
   },
 });

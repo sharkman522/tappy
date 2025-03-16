@@ -21,6 +21,7 @@ import { ltaApi } from './supabase';
 const CACHE_KEYS = {
   BUS_STOPS: 'lta_bus_stops',
   BUS_SERVICES: 'lta_bus_services',
+  BUS_ROUTES: 'lta_bus_routes',
   TRAIN_STATIONS: 'lta_train_stations',
   FAVORITES: 'lta_favorites',
   SEARCH_HISTORY: 'lta_search_history',
@@ -201,19 +202,91 @@ export const getBusArrivals = async (busStopCode: string): Promise<BusArrival[]>
   }
 };
 
-export const getBusRoutes = async (serviceNo: string): Promise<BusRoute[]> => {
+// Function to fetch all bus routes
+const fetchAllBusRoutes = async (): Promise<BusRoute[]> => {
+  console.log('[fetchAllBusRoutes] Fetching all bus routes from API');
+  
   try {
-    // Use Supabase RPC function to get all routes (now with pagination and caching)
+    // Fetch from API
+    console.log('[fetchAllBusRoutes] Calling API to get bus routes');
     const response = await ltaApi.getBusRoutes(0);
     
-    // Filter for the specific service number
     if (response && response.value && Array.isArray(response.value)) {
-      return response.value.filter(route => route.ServiceNo === serviceNo);
+      console.log(`[fetchAllBusRoutes] Received ${response.value.length} bus routes from API`);
+      return response.value;
+    } else {
+      console.log('[fetchAllBusRoutes] Invalid response structure:', response);
+      return [];
+    }
+  } catch (error) {
+    console.error('[fetchAllBusRoutes] Error fetching all bus routes:', error);
+    return [];
+  }
+};
+
+export const getBusRoutes = async (serviceNo: string): Promise<BusRoute[]> => {
+  console.log(`[getBusRoutes] Fetching routes for bus service: ${serviceNo}`);
+  
+  if (!serviceNo) {
+    console.log('[getBusRoutes] No service number provided, returning empty array');
+    return [];
+  }
+  
+  try {
+    // Get all routes from API
+    const allRoutes = await fetchAllBusRoutes();
+    console.log(`[getBusRoutes] Got ${allRoutes.length} total routes, filtering for service ${serviceNo}`);
+    
+    // Log first few routes to debug format issues
+    if (allRoutes.length > 0) {
+      console.log('[getBusRoutes] Sample routes:', allRoutes.slice(0, 3));
     }
     
-    return [];
+    // Try multiple matching strategies
+    // 1. Exact match (most strict)
+    let filteredRoutes = allRoutes.filter(route => route.ServiceNo === serviceNo);
+    console.log(`[getBusRoutes] Exact match routes for service ${serviceNo}: ${filteredRoutes.length}`);
+    
+    // 2. Try loose equality if no exact matches (handles type coercion)
+    if (filteredRoutes.length === 0) {
+      console.log(`[getBusRoutes] No exact matches, trying loose equality for service ${serviceNo}`);
+      filteredRoutes = allRoutes.filter(route => route.ServiceNo == serviceNo);
+      console.log(`[getBusRoutes] Loose equality routes: ${filteredRoutes.length}`);
+    }
+    
+    // 3. Try trimmed comparison if still no matches (handles whitespace issues)
+    if (filteredRoutes.length === 0) {
+      console.log(`[getBusRoutes] No loose matches, trying with trimmed service number`);
+      const trimmedServiceNo = serviceNo.trim();
+      filteredRoutes = allRoutes.filter(route => {
+        const routeServiceNo = route.ServiceNo?.trim() || '';
+        return routeServiceNo === trimmedServiceNo;
+      });
+      console.log(`[getBusRoutes] Trimmed match routes: ${filteredRoutes.length}`);
+    }
+    
+    // 4. Case insensitive comparison as last resort
+    if (filteredRoutes.length === 0) {
+      console.log(`[getBusRoutes] No trimmed matches, trying case insensitive comparison`);
+      const lowerServiceNo = serviceNo.toLowerCase().trim();
+      filteredRoutes = allRoutes.filter(route => {
+        const routeServiceNo = route.ServiceNo?.toLowerCase().trim() || '';
+        return routeServiceNo === lowerServiceNo;
+      });
+      console.log(`[getBusRoutes] Case insensitive match routes: ${filteredRoutes.length}`);
+    }
+    
+    // Log the results
+    if (filteredRoutes.length > 0) {
+      console.log(`[getBusRoutes] Found ${filteredRoutes.length} routes for service ${serviceNo}`);
+      console.log('[getBusRoutes] First matched route:', filteredRoutes[0]);
+    } else {
+      console.log(`[getBusRoutes] No routes found for service ${serviceNo} after all matching attempts`);
+    }
+    
+    return filteredRoutes;
   } catch (error) {
-    console.error(`Error fetching routes for bus ${serviceNo}:`, error);
+    console.error(`[getBusRoutes] Error fetching routes for bus ${serviceNo}:`, error);
     throw error;
   }
 };

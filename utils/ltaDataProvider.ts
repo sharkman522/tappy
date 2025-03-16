@@ -163,24 +163,42 @@ export const useNearbyTransportServices = (
 };
 
 // Hook for getting stops for a route
-export const useRouteStops = (routeNumber: string) => {
+export const useRouteStops = (routeNumber: string, direction: number = 1) => {
   const [stops, setStops] = useState<AppBusStop[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [directions, setDirections] = useState<{[key: number]: string}>({});
+  const [selectedDirection, setSelectedDirection] = useState<number>(direction);
+
+  // Function to set the direction
+  const changeDirection = (newDirection: number) => {
+    console.log(`[useRouteStops] Changing direction to ${newDirection}`);
+    setSelectedDirection(newDirection);
+  };
 
   useEffect(() => {
     let isMounted = true;
+    console.log('[useRouteStops] Hook initialized with routeNumber:', routeNumber, 'direction:', selectedDirection);
 
     const fetchStops = async () => {
+      if (!routeNumber) {
+        console.log('[useRouteStops] No route number provided, skipping fetch');
+        setLoading(false);
+        return;
+      }
+
       try {
         setLoading(true);
         
         // For train routes
         if (routeNumber.toLowerCase().includes('line')) {
+          console.log('[useRouteStops] Processing train route:', routeNumber);
           // Filter train stations by line
           const allStations = await ltaService.getTrainStations();
           const lineCode = getLineCodeFromName(routeNumber);
+          console.log('[useRouteStops] Line code:', lineCode);
           const lineStations = allStations.filter(station => station.Line === lineCode);
+          console.log('[useRouteStops] Found stations for line:', lineStations.length);
           
           if (isMounted) {
             // Convert train stations to the same format as bus stops for consistency
@@ -196,10 +214,13 @@ export const useRouteStops = (routeNumber: string) => {
                 latitude: station.Latitude,
                 longitude: station.Longitude,
               },
-              time: `${index * 3} mins` // Simulate travel time
+              time: `${index * 3} mins`, // Simulate travel time
+              direction: 1 // Default direction for trains
             }));
             
+            console.log('[useRouteStops] Setting stops for train route:', stopsFormat.length);
             setStops(stopsFormat);
+            setDirections({ 1: 'All Stations' });
             setError(null);
           }
         } 
@@ -207,25 +228,69 @@ export const useRouteStops = (routeNumber: string) => {
         else {
           // Extract bus number from routeNumber (e.g., "Bus 51" -> "51")
           const busNumber = routeNumber.replace('Bus ', '');
+          console.log('[useRouteStops] Processing bus route, service number:', busNumber);
           
           // Get routes for this bus number
+          console.log('[useRouteStops] Fetching bus routes for service number:', busNumber);
           const busRoutes = await ltaService.getBusRoutes(busNumber);
+          console.log('[useRouteStops] Bus routes returned:', busRoutes?.length || 0);
           
           // Get all bus stops
+          console.log('[useRouteStops] Fetching all bus stops');
           const allBusStops = await ltaService.getBusStops();
+          console.log('[useRouteStops] Total bus stops:', allBusStops?.length || 0);
           
           // Check if we have a valid response with routes
           if (isMounted && busRoutes && busRoutes.length > 0) {
-            // For simplicity, use the first direction only
-            const direction1Routes = busRoutes
-              .filter((r: BusRoute) => r.Direction === 1)
+            // Get available directions
+            const availableDirections = [...new Set(busRoutes.map(r => r.Direction))].sort();
+            console.log('[useRouteStops] Available directions:', availableDirections);
+            
+            // Create direction names based on first and last stop
+            const directionLabels: {[key: number]: string} = {};
+            
+            for (const dir of availableDirections) {
+              const dirRoutes = busRoutes
+                .filter((r: BusRoute) => r.Direction === dir)
+                .sort((a: BusRoute, b: BusRoute) => a.StopSequence - b.StopSequence);
+              
+              if (dirRoutes.length > 0) {
+                const firstStopCode = dirRoutes[0].BusStopCode;
+                const lastStopCode = dirRoutes[dirRoutes.length - 1].BusStopCode;
+                
+                const firstStop = allBusStops.find(s => s.BusStopCode === firstStopCode);
+                const lastStop = allBusStops.find(s => s.BusStopCode === lastStopCode);
+                
+                directionLabels[dir] = `${firstStop?.Description || firstStopCode} → ${lastStop?.Description || lastStopCode}`;
+              } else {
+                directionLabels[dir] = `Direction ${dir}`;
+              }
+            }
+            
+            console.log('[useRouteStops] Direction labels:', directionLabels);
+            setDirections(directionLabels);
+            
+            // If the selected direction doesn't exist, use the first available one
+            if (!availableDirections.includes(selectedDirection) && availableDirections.length > 0) {
+              setSelectedDirection(availableDirections[0]);
+            }
+            
+            // Filter routes by selected direction
+            const directionRoutes = busRoutes
+              .filter((r: BusRoute) => r.Direction === selectedDirection)
               .sort((a: BusRoute, b: BusRoute) => a.StopSequence - b.StopSequence);
             
+            console.log(`[useRouteStops] Direction ${selectedDirection} routes:`, directionRoutes.length);
+            console.log('[useRouteStops] First few routes:', directionRoutes.slice(0, 3));
+            
             // Map route stops to full stop info
-            const routeStops = direction1Routes.map((route: BusRoute, index: number) => {
+            const routeStops = directionRoutes.map((route: BusRoute, index: number) => {
               const stop = allBusStops.find(s => s.BusStopCode === route.BusStopCode);
               
-              if (!stop) return null;
+              if (!stop) {
+                console.log('[useRouteStops] Could not find stop for code:', route.BusStopCode);
+                return null;
+              }
               
               return {
                 ...stop,
@@ -235,14 +300,19 @@ export const useRouteStops = (routeNumber: string) => {
                   latitude: stop.Latitude,
                   longitude: stop.Longitude,
                 },
-                time: `${index * 2} mins` // Simulate travel time
+                time: `${index * 2} mins`, // Simulate travel time
+                direction: route.Direction,
+                stopSequence: route.StopSequence
               };
             }).filter(Boolean) as AppBusStop[];
             
+            console.log('[useRouteStops] Final route stops count:', routeStops.length);
             setStops(routeStops);
             setError(null);
           } else if (isMounted) {
+            console.log('[useRouteStops] No routes found for bus number:', busNumber);
             setStops([]);
+            setDirections({});
             setError('No stops found for this route');
           }
         }
@@ -264,9 +334,9 @@ export const useRouteStops = (routeNumber: string) => {
     return () => {
       isMounted = false;
     };
-  }, [routeNumber]);
+  }, [routeNumber, selectedDirection]);
 
-  return { stops, loading, error };
+  return { stops, loading, error, directions, selectedDirection, changeDirection };
 };
 
 // Helper function to get line code from name

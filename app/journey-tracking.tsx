@@ -36,6 +36,9 @@ export default function JourneyTrackingScreen() {
   // Find destination stop index
   const destinationIndex = stops.findIndex(stop => stop.id === stopId);
   
+  // Find the user's starting stop index (the stop they're currently at)
+  const [startingStopIndex, setStartingStopIndex] = useState(0);
+  
   // Initialize location service and notifications
   useEffect(() => {
     const initServices = async () => {
@@ -140,6 +143,11 @@ export default function JourneyTrackingScreen() {
         
         // Find closest stop
         const closestStopIndex = distances.indexOf(Math.min(...distances));
+        
+        // If this is the first location update, set the starting stop index
+        if (currentStopIndex === 0 && startingStopIndex === 0) {
+          setStartingStopIndex(closestStopIndex);
+        }
         
         // Calculate distance to next stop (in meters)
         const nextStopIndex = Math.min(closestStopIndex + 1, stops.length - 1);

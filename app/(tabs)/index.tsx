@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { 
   View, 
   Text, 
@@ -31,6 +31,7 @@ import { useLTA } from '@/app/LTAApiContext';
 
 // Utils
 import { getTappyGreeting } from '@/utils/mockData';
+import * as ltaService from '@/services/lta-service';
 
 export default function HomeScreen() {
   // States for UI
@@ -39,6 +40,8 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [showSearchResults, setShowSearchResults] = useState(false);
   const [showSearchHistory, setShowSearchHistory] = useState(false);
+  const [activeTab, setActiveTab] = useState('all'); // New state for filtering: 'all', 'bus', 'train'
+  const [busStopNames, setBusStopNames] = useState<Record<string, string>>({});
 
   // Get LTA context data
   const { 
@@ -66,6 +69,16 @@ export default function HomeScreen() {
   // Filter favorite services
   const favoriteServices = nearbyServices.filter(service => service.isFavorite);
 
+  // Function to get bus stop name from code
+  const getBusStopName = useCallback(async (code: string) => {
+    try {
+      const name = await ltaService.getBusStopName(code);
+      setBusStopNames(prev => ({ ...prev, [code]: name }));
+    } catch (error) {
+      console.error(`Error getting bus stop name for code ${code}:`, error);
+    }
+  }, []);
+
   // Update greeting based on time of day
   useEffect(() => {
     setGreeting(getTappyGreeting());
@@ -76,6 +89,32 @@ export default function HomeScreen() {
     
     return () => clearTimeout(timer);
   }, []);
+  
+  // Track all bus stop codes that need to be fetched
+  const [allBusStopCodes, setAllBusStopCodes] = useState<Set<string>>(new Set());
+  
+  // Update bus stop codes when services change
+  useEffect(() => {
+    const codes = new Set<string>();
+    nearbyServices.forEach(service => {
+      if (service.type === 'bus' && service.id) {
+        const parts = service.id.split('-');
+        if (parts.length > 1) {
+          codes.add(parts[1]);
+        }
+      }
+    });
+    setAllBusStopCodes(codes);
+  }, [nearbyServices]);
+  
+  // Fetch bus stop names whenever the codes change
+  useEffect(() => {
+    allBusStopCodes.forEach(code => {
+      if (!busStopNames[code]) {
+        getBusStopName(code);
+      }
+    });
+  }, [allBusStopCodes, busStopNames, getBusStopName]);
 
   // Handle search
   const handleSearch = useCallback((text: string) => {
@@ -113,11 +152,47 @@ export default function HomeScreen() {
     setTimeout(() => {
       setTappyAnimating(false);
       // Navigate to route details
+      console.log({route});
+      
+      // Create params object based on route type
+      const params: any = { 
+        routeId: route.id,
+        type: route.type
+      };
+      
+      // Add type-specific parameters
+      if (route.type === 'bus') {
+        // For bus routes, the ID format is "ServiceNo-BusStopCode"
+        // Extract the service number from routeNumber ("Bus 123" -> "123")
+        const serviceNumber = route.routeNumber.replace('Bus ', '');
+        
+        // Set the routeNumber for the route details screen
+        params.routeNumber = route.routeNumber;
+        
+        // The useRouteStops hook expects just the service number without "Bus "
+        params.serviceNumber = serviceNumber;
+        
+        // Extract bus stop code from the ID (format: ServiceNo-BusStopCode)
+        const idParts = route.id.split('-');
+        console.log('[handleRoutePress] Bus route ID parts:', idParts);
+        if (idParts.length > 1) {
+          params.busStopCode = idParts[1];
+          console.log('[handleRoutePress] Extracted bus stop code:', params.busStopCode);
+        }
+      } else if (route.type === 'busStop') {
+        params.busStopCode = route.busStopCode;
+        params.description = route.description;
+      } else if (route.type === 'trainStation') {
+        params.stationCode = route.stationCode;
+        params.stationName = route.stationName;
+        params.line = route.line;
+      }
+      
       router.push({
         pathname: '/route-details',
-        params: { routeId: route.id, routeNumber: route.routeNumber }
+        params
       });
-    }, 1500);
+    }, 200);
   };
 
   // Handle pull-to-refresh
@@ -359,6 +434,30 @@ export default function HomeScreen() {
             {/* Nearby Routes Section */}
             <View style={styles.sectionContainer}>
               <Text style={styles.sectionTitle}>Nearby Routes</Text>
+              <View style={styles.sectionHeader}>
+                
+                {/* Filter Tabs */}
+                <View style={styles.tabContainer}>
+                  <TouchableOpacity 
+                    style={[styles.tab, activeTab === 'all' && styles.activeTab]}
+                    onPress={() => setActiveTab('all')}
+                  >
+                    <Text style={[styles.tabText, activeTab === 'all' && styles.activeTabText]}>All</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={[styles.tab, activeTab === 'bus' && styles.activeTab]}
+                    onPress={() => setActiveTab('bus')}
+                  >
+                    <Text style={[styles.tabText, activeTab === 'bus' && styles.activeTabText]}>Bus</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={[styles.tab, activeTab === 'train' && styles.activeTab]}
+                    onPress={() => setActiveTab('train')}
+                  >
+                    <Text style={[styles.tabText, activeTab === 'train' && styles.activeTabText]}>Train</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
               
               {servicesLoading ? (
                 <LoadingIndicator message="Finding nearby routes..." />
@@ -367,18 +466,101 @@ export default function HomeScreen() {
                   Could not load nearby routes. Please try again later.
                 </Text>
               ) : nearbyServices.length > 0 ? (
-                nearbyServices.map((service) => (
-                  <RouteCard
-                    key={service.id}
-                    type={service.type}
-                    routeNumber={service.routeNumber}
-                    destination={service.destination}
-                    time={service.time}
-                    isFavorite={service.isFavorite}
-                    onPress={() => handleRoutePress(service)}
-                    onFavoriteToggle={() => toggleFavorite(service.id)}
-                  />
-                ))
+                // Group services by bus stop
+                (() => {
+                  // Filter services based on active tab
+                  const filteredServices = nearbyServices.filter(
+                    service => activeTab === 'all' || service.type === activeTab
+                  );
+                  
+                  if (filteredServices.length === 0) {
+                    return <Text style={styles.emptyText}>No {activeTab !== 'all' ? activeTab : ''} routes found nearby.</Text>;
+                  }
+                  
+                  
+                  // Extract bus stop code from service ID (format: "ServiceNo-BusStopCode")
+                  const getBusStopCode = (service: any) => {
+                    if (service.type === 'bus' && service.id) {
+                      const parts = service.id.split('-');
+                      return parts.length > 1 ? parts[1] : null;
+                    }
+                    return null;
+                  };
+                  
+                  // Group bus services by bus stop code
+                  const busServicesByStop: Record<string, Array<any>> = {};
+                  const trainServices: Array<any> = [];
+                  const busStopCodes = new Set<string>();
+                  
+                  filteredServices.forEach(service => {
+                    if (service.type === 'bus') {
+                      const busStopCode = getBusStopCode(service);
+                      if (busStopCode) {
+                        busStopCodes.add(busStopCode);
+                        if (!busServicesByStop[busStopCode]) {
+                          busServicesByStop[busStopCode] = [];
+                        }
+                        busServicesByStop[busStopCode].push(service);
+                      }
+                    } else if (service.type === 'train') {
+                      trainServices.push(service);
+                    }
+                  });
+                  
+                  // We now handle bus stop names at the component level
+                  
+                  // Render bus services by stop
+                  const busStopSections = Object.entries(busServicesByStop).map(([stopCode, services]) => {
+                    // Get bus stop name from our state, or use a default
+                    const stopName = busStopNames[stopCode] || 'Bus Stop';
+                    const busStopName = `${stopName} (${stopCode})`;
+                    
+                    return (
+                      <View key={stopCode} style={styles.busStopSection}>
+                        <Text style={styles.busStopName}>{busStopName}</Text>
+                        {services.map((service: any) => (
+                          <RouteCard
+                            key={service.id}
+                            type={service.type}
+                            routeNumber={service.routeNumber}
+                            destination={service.destination}
+                            time={service.time}
+                            isFavorite={service.isFavorite}
+                            onPress={() => handleRoutePress(service)}
+                            onFavoriteToggle={() => toggleFavorite(service.id)}
+                          />
+                        ))}
+                      </View>
+                    );
+                  });
+                  
+                  // Render train services if any
+                  const trainSection = trainServices.length > 0 ? (
+                    <View key="train-stations" style={styles.busStopSection}>
+                      <Text style={styles.busStopName}>Nearby Train Stations</Text>
+                      {trainServices.map((service: any) => (
+                        <RouteCard
+                          key={service.id}
+                          type={service.type}
+                          routeNumber={service.routeNumber}
+                          destination={service.destination}
+                          time={service.time}
+                          isFavorite={service.isFavorite}
+                          onPress={() => handleRoutePress(service)}
+                          onFavoriteToggle={() => toggleFavorite(service.id)}
+                        />
+                      ))}
+                    </View>
+                  ) : null;
+                  
+                  // Combine bus and train sections
+                  return (
+                    <>
+                      {busStopSections}
+                      {activeTab !== 'bus' && trainSection}
+                    </>
+                  );
+                })()
               ) : (
                 <Text style={styles.emptyText}>No routes found nearby.</Text>
               )}
@@ -424,12 +606,61 @@ const styles = StyleSheet.create({
     marginTop: 20,
     marginBottom: 15,
   },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    paddingHorizontal: 15,
+    marginTop: -35, // Pull the filter tabs up to align with the section title
+    marginBottom: 10,
+  },
   sectionTitle: {
     fontSize: 18,
     fontWeight: '600',
     color: '#1F2937',
     paddingHorizontal: 15,
     marginBottom: 10,
+  },
+  // Bus stop section styles
+  busStopSection: {
+    marginBottom: 15,
+    paddingTop: 5,
+  },
+  busStopName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#4B5563',
+    paddingHorizontal: 15,
+    marginBottom: 8,
+    marginTop: 5,
+  },
+  // Tab styles
+  tabContainer: {
+    flexDirection: 'row',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 20,
+    padding: 2,
+  },
+  tab: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 18,
+  },
+  activeTab: {
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 1,
+    elevation: 1,
+  },
+  tabText: {
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  activeTabText: {
+    color: '#4BB377',
+    fontWeight: '600',
   },
   emptyText: {
     textAlign: 'center',

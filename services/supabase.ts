@@ -79,7 +79,7 @@ export const ltaApi = {
       if (cachedData && cacheTimestamp) {
         const timestamp = parseInt(cacheTimestamp, 10);
         const now = Date.now();
-        const oneDay = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+        const oneDay = 24 * 60 * 60 * 30* 1000; // 60 days in milliseconds
         
         if (now - timestamp < oneDay) {
           return JSON.parse(cachedData);
@@ -100,6 +100,8 @@ export const ltaApi = {
           }
         });
 
+        console.log({data2: data})
+
         if (error) throw error;
         
         if (data && data.value && data.value.length > 0) {
@@ -110,7 +112,7 @@ export const ltaApi = {
         }
         
         // Safety check to prevent infinite loops
-        if (currentSkip > 10000) {
+        if (currentSkip > 1000000) {
           hasMoreData = false;
         }
       }

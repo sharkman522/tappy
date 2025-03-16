@@ -8,6 +8,7 @@ interface RouteCardProps {
   destination: string;
   time: string;
   isFavorite?: boolean;
+  busStopName?: string; // Added bus stop name prop
   onPress: () => void;
   onFavoriteToggle?: () => void;
 }
@@ -18,6 +19,7 @@ export default function RouteCard({
   destination,
   time,
   isFavorite = false,
+  busStopName,
   onPress,
   onFavoriteToggle,
 }: RouteCardProps) {
@@ -35,6 +37,9 @@ export default function RouteCard({
           <Text style={styles.routeNumber}>{routeNumber}</Text>
           <Text style={styles.destination}>to {destination}</Text>
         </View>
+        {busStopName && (
+          <Text style={styles.busStopName}>at {busStopName}</Text>
+        )}
         <Text style={styles.time}>{time}</Text>
       </View>
       
@@ -97,6 +102,12 @@ const styles = StyleSheet.create({
   destination: {
     fontSize: 16,
     color: '#4B5563',
+  },
+  busStopName: {
+    fontSize: 14,
+    color: '#6B7280',
+    marginBottom: 2,
+    fontStyle: 'italic',
   },
   time: {
     fontSize: 14,
