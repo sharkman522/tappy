@@ -13,6 +13,11 @@ interface MapProgressBarProps {
   }>;
   currentStopIndex: number;
   destinationStopIndex: number;
+  partialProgress?: number; // Progress between current and next stop (0-100)
+  currentLocation?: {
+    latitude: number;
+    longitude: number;
+  };
 }
 
 export default function MapProgressBar(props: MapProgressBarProps) {

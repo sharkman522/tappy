@@ -298,8 +298,32 @@ export const getTrainStations = async (): Promise<AppTrainStation[]> => {
   if (cached) return cached;
   
   try {
-    // This is a placeholder since LTA API doesn't have a direct endpoint for train stations
-    // In a real app, you'd fetch from the actual API endpoint or use a predetermined list
+    // Fetch train stations from LTA API via Supabase
+    const response = await ltaApi.getTrainStations();
+    const trainStations = response.value || [];
+    
+    console.log(`[getTrainStations] Fetched ${trainStations.length} train stations from API`);
+    
+    // Map to app format
+    const appTrainStations: AppTrainStation[] = trainStations.map((station: TrainStation) => ({
+      ...station,
+      id: station.StationCode,
+      name: station.StationName,
+      coordinates: {
+        latitude: station.Latitude,
+        longitude: station.Longitude
+      }
+    }));
+    
+    // Save to cache
+    await saveToCache(CACHE_KEYS.TRAIN_STATIONS, appTrainStations);
+    
+    return appTrainStations;
+  } catch (error) {
+    console.error('Error fetching train stations:', error);
+    
+    // Fallback to hardcoded data if API fails
+    console.log('[getTrainStations] API failed, using fallback data');
     
     // Simulating train station data for Singapore's MRT lines
     const trainStations: TrainStation[] = [
@@ -332,44 +356,16 @@ export const getTrainStations = async (): Promise<AppTrainStation[]> => {
       { StationCode: 'NS27', StationName: 'Marina Bay', Line: 'NSL', Latitude: 1.2765, Longitude: 103.8547 },
       { StationCode: 'NS28', StationName: 'Marina South Pier', Line: 'NSL', Latitude: 1.2713, Longitude: 103.8631 },
       
-      // East-West Line (Green)
+      // East-West Line (Green) - just a few stations as examples
       { StationCode: 'EW1', StationName: 'Pasir Ris', Line: 'EWL', Latitude: 1.3732, Longitude: 103.9492 },
       { StationCode: 'EW2', StationName: 'Tampines', Line: 'EWL', Latitude: 1.3546, Longitude: 103.9456 },
       { StationCode: 'EW3', StationName: 'Simei', Line: 'EWL', Latitude: 1.3432, Longitude: 103.9530 },
       { StationCode: 'EW4', StationName: 'Tanah Merah', Line: 'EWL', Latitude: 1.3272, Longitude: 103.9468 },
       { StationCode: 'EW5', StationName: 'Bedok', Line: 'EWL', Latitude: 1.3244, Longitude: 103.9296 },
-      { StationCode: 'EW6', StationName: 'Kembangan', Line: 'EWL', Latitude: 1.3214, Longitude: 103.9129 },
-      { StationCode: 'EW7', StationName: 'Eunos', Line: 'EWL', Latitude: 1.3198, Longitude: 103.9030 },
-      { StationCode: 'EW8', StationName: 'Paya Lebar', Line: 'EWL', Latitude: 1.3177, Longitude: 103.8927 },
-      { StationCode: 'EW9', StationName: 'Aljunied', Line: 'EWL', Latitude: 1.3162, Longitude: 103.8829 },
-      { StationCode: 'EW10', StationName: 'Kallang', Line: 'EWL', Latitude: 1.3116, Longitude: 103.8713 },
-      { StationCode: 'EW11', StationName: 'Lavender', Line: 'EWL', Latitude: 1.3075, Longitude: 103.8630 },
-      { StationCode: 'EW12', StationName: 'Bugis', Line: 'EWL', Latitude: 1.3011, Longitude: 103.8562 },
-      { StationCode: 'EW13', StationName: 'City Hall', Line: 'EWL', Latitude: 1.2926, Longitude: 103.8529 },
-      { StationCode: 'EW14', StationName: 'Raffles Place', Line: 'EWL', Latitude: 1.2840, Longitude: 103.8514 },
-      { StationCode: 'EW15', StationName: 'Tanjong Pagar', Line: 'EWL', Latitude: 1.2762, Longitude: 103.8462 },
-      { StationCode: 'EW16', StationName: 'Outram Park', Line: 'EWL', Latitude: 1.2807, Longitude: 103.8388 },
-      { StationCode: 'EW17', StationName: 'Tiong Bahru', Line: 'EWL', Latitude: 1.2861, Longitude: 103.8267 },
-      { StationCode: 'EW18', StationName: 'Redhill', Line: 'EWL', Latitude: 1.2901, Longitude: 103.8168 },
-      { StationCode: 'EW19', StationName: 'Queenstown', Line: 'EWL', Latitude: 1.2951, Longitude: 103.8060 },
-      { StationCode: 'EW20', StationName: 'Commonwealth', Line: 'EWL', Latitude: 1.3023, Longitude: 103.7982 },
-      { StationCode: 'EW21', StationName: 'Buona Vista', Line: 'EWL', Latitude: 1.3073, Longitude: 103.7901 },
-      { StationCode: 'EW22', StationName: 'Dover', Line: 'EWL', Latitude: 1.3116, Longitude: 103.7787 },
-      { StationCode: 'EW23', StationName: 'Clementi', Line: 'EWL', Latitude: 1.3151, Longitude: 103.7652 },
-      { StationCode: 'EW24', StationName: 'Jurong East', Line: 'EWL', Latitude: 1.3329, Longitude: 103.7422 },
-      { StationCode: 'EW25', StationName: 'Chinese Garden', Line: 'EWL', Latitude: 1.3421, Longitude: 103.7328 },
-      { StationCode: 'EW26', StationName: 'Lakeside', Line: 'EWL', Latitude: 1.3444, Longitude: 103.7208 },
-      { StationCode: 'EW27', StationName: 'Boon Lay', Line: 'EWL', Latitude: 1.3386, Longitude: 103.7060 },
-      { StationCode: 'EW28', StationName: 'Pioneer', Line: 'EWL', Latitude: 1.3378, Longitude: 103.6972 },
-      { StationCode: 'EW29', StationName: 'Joo Koon', Line: 'EWL', Latitude: 1.3278, Longitude: 103.6783 },
-      { StationCode: 'EW30', StationName: 'Gul Circle', Line: 'EWL', Latitude: 1.3207, Longitude: 103.6606 },
-      { StationCode: 'EW31', StationName: 'Tuas Crescent', Line: 'EWL', Latitude: 1.3212, Longitude: 103.6496 },
-      { StationCode: 'EW32', StationName: 'Tuas West Road', Line: 'EWL', Latitude: 1.3302, Longitude: 103.6385 },
-      { StationCode: 'EW33', StationName: 'Tuas Link', Line: 'EWL', Latitude: 1.3396, Longitude: 103.6368 },
     ];
     
     // Map to app format
-    const appTrainStations: AppTrainStation[] = trainStations.map(station => ({
+    const appTrainStations: AppTrainStation[] = trainStations.map((station: TrainStation) => ({
       ...station,
       id: station.StationCode,
       name: station.StationName,
@@ -383,18 +379,43 @@ export const getTrainStations = async (): Promise<AppTrainStation[]> => {
     await saveToCache(CACHE_KEYS.TRAIN_STATIONS, appTrainStations);
     
     return appTrainStations;
+  }
+};
+
+export const getTrainArrivals = async (stationCode: string): Promise<any> => {
+  try {
+    console.log(`[getTrainArrivals] Fetching arrivals for station: ${stationCode}`);
+    
+    // Fetch train arrivals from LTA API via Supabase
+    const response = await ltaApi.getTrainArrivals(stationCode);
+    
+    if (response) {
+      console.log('[getTrainArrivals] Received train arrivals data from API');
+      return response;
+    }
+    
+    // Return empty data if no arrivals are available
+    console.log('[getTrainArrivals] No arrivals data from API');
+    return { Services: [] };
   } catch (error) {
-    console.error('Error fetching train stations:', error);
-    throw error;
+    console.error(`[getTrainArrivals] Error fetching train arrivals for station ${stationCode}:`, error);
+    // Return empty data in case of error
+    return { Services: [] };
   }
 };
 
 export const getTrainServiceAlerts = async (): Promise<TrainServiceAlert | null> => {
   try {
-    // LTA doesn't provide a direct API for train service alerts
-    // In a real app, you would fetch from an actual API endpoint
+    // Fetch train service alerts from LTA API via Supabase
+    const response = await ltaApi.getTrainServiceAlerts();
     
-    // For this demo, we'll return a normal status
+    if (response && response.value && response.value.length > 0) {
+      console.log('[getTrainServiceAlerts] Received service alerts from API');
+      return response.value[0];
+    }
+    
+    // Fallback to default response if no data is returned
+    console.log('[getTrainServiceAlerts] No alerts from API, using default response');
     return {
       Status: "1", // 1 = Normal service
       AffectedSegments: [],
@@ -402,7 +423,13 @@ export const getTrainServiceAlerts = async (): Promise<TrainServiceAlert | null>
     };
   } catch (error) {
     console.error('Error fetching train service alerts:', error);
-    throw error;
+    
+    // Return a default response in case of error
+    return {
+      Status: "1", // 1 = Normal service
+      AffectedSegments: [],
+      Message: "Normal service on all lines."
+    };
   }
 };
 

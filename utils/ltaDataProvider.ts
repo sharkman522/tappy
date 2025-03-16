@@ -163,12 +163,13 @@ export const useNearbyTransportServices = (
 };
 
 // Hook for getting stops for a route
-export const useRouteStops = (routeNumber: string, direction: number = 1) => {
+export const useRouteStops = (routeNumber: string, direction: number = 1, initialBusStopCode?: string) => {
   const [stops, setStops] = useState<AppBusStop[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [directions, setDirections] = useState<{[key: number]: string}>({});
   const [selectedDirection, setSelectedDirection] = useState<number>(direction);
+  const [autoSelectedDirection, setAutoSelectedDirection] = useState<boolean>(false);
 
   // Function to set the direction
   const changeDirection = (newDirection: number) => {
@@ -270,9 +271,34 @@ export const useRouteStops = (routeNumber: string, direction: number = 1) => {
             console.log('[useRouteStops] Direction labels:', directionLabels);
             setDirections(directionLabels);
             
+            // Auto-select direction based on initialBusStopCode if provided
+            let directionToUse = selectedDirection;
+            
+            if (initialBusStopCode && !autoSelectedDirection) {
+              console.log('[useRouteStops] Attempting to auto-select direction based on bus stop:', initialBusStopCode);
+              
+              // Find which direction contains the initialBusStopCode
+              for (const dir of availableDirections) {
+                const dirRoutes = busRoutes.filter((r: BusRoute) => r.Direction === dir);
+                const stopInDirection = dirRoutes.some(route => route.BusStopCode === initialBusStopCode);
+                
+                if (stopInDirection) {
+                  console.log(`[useRouteStops] Found initialBusStopCode in direction ${dir}`);
+                  directionToUse = dir;
+                  setAutoSelectedDirection(true);
+                  break;
+                }
+              }
+            }
+            
             // If the selected direction doesn't exist, use the first available one
-            if (!availableDirections.includes(selectedDirection) && availableDirections.length > 0) {
-              setSelectedDirection(availableDirections[0]);
+            if (!availableDirections.includes(directionToUse) && availableDirections.length > 0) {
+              directionToUse = availableDirections[0];
+            }
+            
+            // Update the selected direction
+            if (directionToUse !== selectedDirection) {
+              setSelectedDirection(directionToUse);
             }
             
             // Filter routes by selected direction
@@ -382,7 +408,7 @@ export const useRouteStops = (routeNumber: string, direction: number = 1) => {
     }
   }, [stops]);
 
-  return { stops, loading, error, directions, selectedDirection, changeDirection, allStops };
+  return { stops, loading, error, directions, selectedDirection, changeDirection, allStops, autoSelectedDirection };
 };
 
 // Helper function to get line code from name
@@ -569,6 +595,81 @@ export const useBusArrivals = (busStopCode: string) => {
   }, [busStopCode]);
 
   return { arrivals, loading, error };
+};
+
+// Hook for fetching train arrivals at a specific station
+export const useTrainArrivals = (stationCode: string) => {
+  const [arrivals, setArrivals] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    console.log('[useTrainArrivals] Hook initialized with stationCode:', stationCode);
+
+    const fetchArrivals = async () => {
+      if (!stationCode) {
+        console.log('[useTrainArrivals] No station code provided, skipping fetch');
+        setLoading(false);
+        return;
+      }
+
+      try {
+        setLoading(true);
+        const response = await ltaService.getTrainArrivals(stationCode);
+        
+        if (isMounted && response && response.Services) {
+          console.log(`[useTrainArrivals] Received ${response.Services.length} train services`);
+          setArrivals(response.Services);
+          setError(null);
+        } else if (isMounted) {
+          console.log('[useTrainArrivals] No services found or empty response');
+          setArrivals([]);
+        }
+      } catch (err) {
+        if (isMounted) {
+          console.error('[useTrainArrivals] Error fetching train arrivals:', err);
+          setError('Could not load train arrivals');
+        }
+      } finally {
+        if (isMounted) {
+          setLoading(false);
+        }
+      }
+    };
+
+    fetchArrivals();
+
+    // Set up a refresh interval (every 30 seconds)
+    const intervalId = setInterval(fetchArrivals, 30000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(intervalId);
+    };
+  }, [stationCode]);
+
+  const refreshArrivals = useCallback(async () => {
+    if (!stationCode || loading) return;
+    
+    setLoading(true);
+    try {
+      const response = await ltaService.getTrainArrivals(stationCode);
+      if (response && response.Services) {
+        setArrivals(response.Services);
+        setError(null);
+      } else {
+        setArrivals([]);
+      }
+    } catch (err) {
+      console.error('[useTrainArrivals] Error refreshing train arrivals:', err);
+      setError('Could not refresh train arrivals');
+    } finally {
+      setLoading(false);
+    }
+  }, [stationCode, loading]);
+
+  return { arrivals, loading, error, refreshArrivals };
 };
 
 // Helper function to format arrival time

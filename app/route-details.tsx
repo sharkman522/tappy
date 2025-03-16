@@ -13,7 +13,7 @@ import LoadingIndicator from '@/components/LoadingIndicator';
 
 // Context and Hooks
 import { useLTA } from '@/app/LTAApiContext';
-import { useRouteStops, useBusArrivals } from '@/utils/ltaDataProvider';
+import { useRouteStops, useBusArrivals, useTrainArrivals } from '@/utils/ltaDataProvider';
 import { locationService } from '@/utils/locationService';
 
 // Helper function to get color based on train line
@@ -78,8 +78,10 @@ export default function RouteDetailsScreen() {
   const [showPastStops, setShowPastStops] = useState(false);
   
   // Get stops for this route (only for bus routes)
-  const { stops, loading, error, directions, selectedDirection, changeDirection, allStops } = useRouteStops(
-    contentType === 'bus' ? (serviceNumber as string || '') : ''
+  const { stops, loading, error, directions, selectedDirection, changeDirection, allStops, autoSelectedDirection } = useRouteStops(
+    contentType === 'bus' ? (serviceNumber as string || '') : '',
+    1, // Default direction
+    typeof busStopCode === 'string' ? busStopCode : undefined // Ensure busStopCode is a string
   );
   
   // Find the closest stop to the user's current location
@@ -464,32 +466,73 @@ export default function RouteDetailsScreen() {
             </View>
             
             <Text style={styles.sectionTitle}>Services</Text>
-            {/* Simulated train services - in a real app, this would come from an API */}
-            <View style={styles.arrivalCard}>
-              <View style={styles.arrivalHeader}>
-                <View style={styles.serviceNoContainer}>
-                  <Text style={[styles.serviceNo, { color: getLineColor(line as string) }]}>{line}</Text>
-                </View>
-                <Text style={styles.operatorText}>SMRT</Text>
-              </View>
+            {/* Fetch real train services */}
+            {(() => {
+              // Use the train arrivals hook
+              const { arrivals, loading, error } = useTrainArrivals(stationCode as string);
               
-              <View style={styles.arrivalTimesContainer}>
-                <View style={styles.arrivalTime}>
-                  <Clock size={14} color="#4B5563" />
-                  <Text style={styles.arrivalTimeText}>Arriving</Text>
+              if (loading) {
+                return <LoadingIndicator message="Loading train services..." />;
+              }
+              
+              if (error) {
+                return (
+                  <Text style={styles.errorText}>
+                    Could not load train services. Please try again later.
+                  </Text>
+                );
+              }
+              
+              if (!arrivals || arrivals.length === 0) {
+                return (
+                  <Text style={styles.emptyText}>No train services available at this time.</Text>
+                );
+              }
+              
+              return arrivals.map((service, index) => (
+                <View key={`${service.TrainLine}-${index}`} style={styles.arrivalCard}>
+                  <View style={styles.arrivalHeader}>
+                    <View style={styles.serviceNoContainer}>
+                      <Text style={[styles.serviceNo, { color: getLineColor(service.TrainLine) }]}>
+                        {service.TrainLine}
+                      </Text>
+                    </View>
+                    <Text style={styles.operatorText}>
+                      {service.Operator || 'SMRT'}
+                    </Text>
+                  </View>
+                  
+                  <View style={styles.arrivalTimesContainer}>
+                    {service.NextTrain && (
+                      <View style={styles.arrivalTime}>
+                        <Clock size={14} color="#4B5563" />
+                        <Text style={styles.arrivalTimeText}>
+                          {service.NextTrain.TimeToArrival <= 1 ? 'Arriving' : `${service.NextTrain.TimeToArrival} mins`}
+                        </Text>
+                      </View>
+                    )}
+                    
+                    {service.NextTrain2 && (
+                      <View style={styles.arrivalTime}>
+                        <Clock size={14} color="#4B5563" />
+                        <Text style={styles.arrivalTimeText}>
+                          {service.NextTrain2.TimeToArrival} mins
+                        </Text>
+                      </View>
+                    )}
+                    
+                    {service.NextTrain3 && (
+                      <View style={styles.arrivalTime}>
+                        <Clock size={14} color="#4B5563" />
+                        <Text style={styles.arrivalTimeText}>
+                          {service.NextTrain3.TimeToArrival} mins
+                        </Text>
+                      </View>
+                    )}
+                  </View>
                 </View>
-                
-                <View style={styles.arrivalTime}>
-                  <Clock size={14} color="#4B5563" />
-                  <Text style={styles.arrivalTimeText}>5 mins</Text>
-                </View>
-                
-                <View style={styles.arrivalTime}>
-                  <Clock size={14} color="#4B5563" />
-                  <Text style={styles.arrivalTimeText}>12 mins</Text>
-                </View>
-              </View>
-            </View>
+              ));
+            })()}
           </View>
         )}
       </ScrollView>

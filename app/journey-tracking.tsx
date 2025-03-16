@@ -22,6 +22,8 @@ export default function JourneyTrackingScreen() {
   const [journeyStatus, setJourneyStatus] = useState('Starting your journey...');
   const [tappyState, setTappyState] = useState<'sleeping' | 'happy' | 'alert'>('sleeping');
   const [isAlarmTriggered, setIsAlarmTriggered] = useState(false);
+  const [currentLocation, setCurrentLocation] = useState<{latitude: number, longitude: number} | null>(null);
+  const [partialProgress, setPartialProgress] = useState<number>(0);
   // Test mode completely removed as requested
   const [locationPermission, setLocationPermission] = useState(true);
   const [gpsError, setGpsError] = useState(false);
@@ -31,7 +33,11 @@ export default function JourneyTrackingScreen() {
   const responseListener = useRef<Notifications.Subscription>();
 
   // Get stops for this route from the LTA API
-  const { stops, loading, error } = useRouteStops(routeNumber as string);
+  const { stops, loading, error } = useRouteStops(
+    routeNumber as string,
+    1, // Default direction
+    stopId as string // Pass the stopId to auto-select the direction
+  );
   
   // Find destination stop index
   const destinationIndex = stops.findIndex(stop => stop.id === stopId);
@@ -197,6 +203,12 @@ export default function JourneyTrackingScreen() {
     
     let stopCheckInterval: NodeJS.Timeout;
     const unsubscribe = locationService.watchLocation((location) => {
+      // Store current location for UI updates
+      setCurrentLocation({
+        latitude: location.latitude,
+        longitude: location.longitude
+      });
+      
       // Check which stop we're closest to
       if (stops.length > 0) {
         // Calculate distances to all stops
@@ -233,6 +245,21 @@ export default function JourneyTrackingScreen() {
           stops[destinationIndex].coordinates.latitude,
           stops[destinationIndex].coordinates.longitude
         );
+        
+        // Calculate partial progress between current stop and next stop
+        if (closestStopIndex < stops.length - 1) {
+          const distanceBetweenStops = calculateDistance(
+            stops[closestStopIndex].coordinates.latitude,
+            stops[closestStopIndex].coordinates.longitude,
+            stops[nextStopIndex].coordinates.latitude,
+            stops[nextStopIndex].coordinates.longitude
+          );
+          
+          // Calculate progress as percentage (0-100)
+          // Invert the percentage since we want 0% at current stop and 100% at next stop
+          const progress = Math.max(0, Math.min(100, (1 - (distanceToNextStop / distanceBetweenStops)) * 100));
+          setPartialProgress(progress);
+        }
         
         // Update current stop if it's changed
         if (closestStopIndex !== currentStopIndex) {
@@ -405,6 +432,8 @@ export default function JourneyTrackingScreen() {
             stops={stops}
             currentStopIndex={currentStopIndex}
             destinationStopIndex={destinationIndex}
+            partialProgress={partialProgress}
+            currentLocation={currentLocation || undefined}
           />
         </View>
         

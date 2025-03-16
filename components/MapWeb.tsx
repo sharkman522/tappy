@@ -13,13 +13,21 @@ interface MapWebProps {
   }>;
   currentStopIndex: number;
   destinationStopIndex: number;
+  partialProgress?: number; // Progress between current and next stop (0-100)
+  currentLocation?: {
+    latitude: number;
+    longitude: number;
+  };
 }
 
-export default function MapWeb({
-  stops,
-  currentStopIndex,
-  destinationStopIndex,
-}: MapWebProps) {
+export default function MapWeb(props: MapWebProps) {
+  const {
+    stops,
+    currentStopIndex,
+    destinationStopIndex,
+    partialProgress,
+    currentLocation
+  } = props;
   // Track the highest progress values to prevent reversal
   const [highestProgress, setHighestProgress] = React.useState(0);
   const [highestVerticalProgress, setHighestVerticalProgress] = React.useState<{[key: string]: number}>({});
@@ -63,13 +71,13 @@ export default function MapWeb({
     // Calculate base progress based on completed stops
     const completedStops = currentStopIndex - stops.indexOf(visibleStops[0]);
     
-    // Add partial progress to next stop (0-100%)
+    // Add partial progress to next stop based on real location data
     // This creates the dynamic movement between stops
-    const partialProgress = Math.min(20, Math.random() * 30); // Simulate movement between stops
+    const progressValue = partialProgress !== undefined ? partialProgress : 0;
     
     // Calculate total progress percentage
     currentProgress = ((completedStops / totalStopsInJourney) * 100) + 
-                     ((partialProgress / totalStopsInJourney));
+                     ((progressValue / 100) * (100 / totalStopsInJourney));
   } else if (currentStopIndex >= destinationStopIndex) {
     // Already at or past destination
     currentProgress = 100;
@@ -99,9 +107,14 @@ export default function MapWeb({
     }
     // If we're at the stop just before this connector, show partial progress
     else if (stopIndex === currentStopIndex - stops.indexOf(visibleStops[0]) + 1) {
-      // Calculate partial progress based on overall progress
-      const segmentProgress = (progress % (100 / totalStopsInJourney)) * totalStopsInJourney;
-      connectorProgress = Math.min(100, segmentProgress * 2); // Amplify for better visual effect
+      // Use the partial progress from props if available, otherwise calculate it
+      if (partialProgress !== undefined) {
+        connectorProgress = partialProgress;
+      } else {
+        // Calculate partial progress based on overall progress
+        const segmentProgress = (progress % (100 / totalStopsInJourney)) * totalStopsInJourney;
+        connectorProgress = Math.min(100, segmentProgress * 2); // Amplify for better visual effect
+      }
     }
     
     // Get the highest progress for this connector

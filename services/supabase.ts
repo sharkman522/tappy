@@ -1,7 +1,7 @@
 import 'react-native-url-polyfill/auto';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient } from '@supabase/supabase-js';
-import { BusRoute } from '../types/lta-api';
+import { BusRoute, TrainStation } from '../types/lta-api';
 
 // Initialize the Supabase client
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
@@ -161,6 +161,96 @@ export const ltaApi = {
       return data;
     } catch (error) {
       console.error(`[ltaApi.getBusArrivals] Error fetching bus arrivals for stop ${busStopCode} via Supabase:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get train stations from LTA API via Supabase proxy
+   */
+  getTrainStations: async () => {
+    try {
+      // Check if we have cached data in local storage
+      const cachedData = await AsyncStorage.getItem('trainStationsCache');
+      const cacheTimestamp = await AsyncStorage.getItem('trainStationsCacheTimestamp');
+      
+      // If we have cached data and it's less than 24 hours old, use it
+      if (cachedData && cacheTimestamp) {
+        const timestamp = parseInt(cacheTimestamp, 10);
+        const now = Date.now();
+        const oneDay = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+        
+        if (now - timestamp < oneDay) {
+          return JSON.parse(cachedData);
+        }
+      }
+      
+      const { data, error } = await supabase.functions.invoke('lta-proxy', {
+        body: {
+          endpoint: 'TrainStationList',
+          method: 'GET',
+          params: {}
+        }
+      });
+
+      if (error) throw error;
+      
+      // Cache the results
+      await AsyncStorage.setItem('trainStationsCache', JSON.stringify(data));
+      await AsyncStorage.setItem('trainStationsCacheTimestamp', Date.now().toString());
+      
+      return data;
+    } catch (error) {
+      console.error('Error fetching train stations via Supabase:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get train service alerts from LTA API via Supabase proxy
+   */
+  getTrainServiceAlerts: async () => {
+    try {
+      const { data, error } = await supabase.functions.invoke('lta-proxy', {
+        body: {
+          endpoint: 'TrainServiceAlerts',
+          method: 'GET',
+          params: {}
+        }
+      });
+
+      if (error) throw error;
+      return data;
+    } catch (error) {
+      console.error('Error fetching train service alerts via Supabase:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get train arrival timing for a specific station
+   */
+  getTrainArrivals: async (stationCode: string) => {
+    try {
+      console.log(`[ltaApi.getTrainArrivals] Starting request for station: ${stationCode}`);
+      
+      const { data, error } = await supabase.functions.invoke('lta-proxy', {
+        body: {
+          endpoint: 'TrainArrival',
+          method: 'GET',
+          params: { StationCode: stationCode }
+        }
+      });
+
+      if (error) {
+        console.error('[ltaApi.getTrainArrivals] Supabase function error:', error);
+        throw error;
+      }
+      
+      console.log('[ltaApi.getTrainArrivals] Received response data:', data);
+      return data;
+    } catch (error) {
+      console.error(`[ltaApi.getTrainArrivals] Error fetching train arrivals for station ${stationCode} via Supabase:`, error);
       throw error;
     }
   }
