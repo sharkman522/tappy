@@ -21,7 +21,7 @@ interface LTAContextType {
   favoritesLoading: boolean;
   addFavorite: (routeId: string) => Promise<void>;
   removeFavorite: (routeId: string) => Promise<void>;
-  toggleFavorite: (routeId: string) => Promise<void>;
+  toggleFavorite: (routeId: string) => Promise<boolean | null>;
   
   // Search related
   searchQuery: string;
@@ -73,6 +73,12 @@ export function LTAProvider({ children }: { children: ReactNode }) {
     userLocation?.longitude || (useFallbackData ? 103.8198 : undefined)
   );
   
+  // We need to refresh services when favorites change to update UI
+  const refreshServicesOnFavoriteChange = useCallback(() => {
+    console.log('Refreshing services after favorite change');
+    refreshServices();
+  }, [refreshServices]);
+  
   // Use search hook
   const {
     query: searchQuery,
@@ -109,9 +115,15 @@ export function LTAProvider({ children }: { children: ReactNode }) {
   }, [removeFavoriteImpl]);
   
   const toggleFavorite = useCallback(async (routeId: string) => {
-    await toggleFavoriteImpl(routeId);
-    // Update occurs automatically through useEffect
-  }, [toggleFavoriteImpl]);
+    // Call the implementation and get the new favorite state
+    const newIsFavorite = await toggleFavoriteImpl(routeId);
+    
+    // Immediately refresh services to update UI
+    setTimeout(() => refreshServicesOnFavoriteChange(), 100);
+    
+    // Return the new state so UI components can update immediately
+    return newIsFavorite;
+  }, [toggleFavoriteImpl, refreshServicesOnFavoriteChange]);
 
   const value: LTAContextType = {
     userLocation,

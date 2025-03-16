@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -20,11 +20,29 @@ export default function FavoritesScreen() {
     nearbyServices,
     servicesLoading,
     refreshServices,
-    toggleFavorite
+    toggleFavorite,
+    favorites
   } = useLTA();
 
-  // Filter favorite services
-  const favoriteServices = nearbyServices.filter(service => service.isFavorite);
+  // Filter favorite services and add isFavorite flag if needed
+  // Use both the isFavorite flag and the favorites array for more reliable filtering
+  const favoriteServices = nearbyServices
+    .filter(service => service.isFavorite || favorites.includes(service.id))
+    .map(service => ({
+      ...service,
+      isFavorite: true // Ensure all services in this list are marked as favorites
+    }));
+    
+  // Keep track of removed services for immediate UI updates
+  const [removedServiceIds, setRemovedServiceIds] = useState<string[]>([]);
+  
+  // Filter out any services that have been removed in the current session
+  const displayedServices = favoriteServices.filter(service => !removedServiceIds.includes(service.id));
+    
+  console.log('Favorites tab - Current favorites:', favorites.length, 
+              'Filtered services:', favoriteServices.length,
+              'Displayed services:', displayedServices.length,
+              'Removed services:', removedServiceIds.length);
 
   // Handle route selection
   const handleRoutePress = (route: any) => {
@@ -38,7 +56,10 @@ export default function FavoritesScreen() {
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
+      console.log('Refreshing favorites screen');
       await refreshServices();
+      // Force a delay to ensure favorites are loaded
+      await new Promise(resolve => setTimeout(resolve, 500));
     } catch (error) {
       console.error('Error refreshing:', error);
     } finally {
@@ -49,12 +70,35 @@ export default function FavoritesScreen() {
   // Toggle favorite status
   const handleToggleFavorite = async (routeId: string) => {
     try {
+      console.log('Toggling favorite in favorites screen:', routeId);
+      
+      // Since we're in the favorites tab, we know we're removing a favorite
+      // Add this ID to our removed services list for immediate UI update
+      setRemovedServiceIds(prev => [...prev, routeId]);
+      
+      // Call the toggle function
       await toggleFavorite(routeId);
+      
+      // Force a full refresh after a short delay to sync with storage
+      setTimeout(() => {
+        console.log('Refreshing favorites after toggle');
+        // Clear the removed services list when we refresh
+        setRemovedServiceIds([]);
+        onRefresh();
+      }, 500);
     } catch (error) {
       console.error('Error toggling favorite:', error);
+      // If there's an error, remove the ID from our removed list
+      setRemovedServiceIds(prev => prev.filter(id => id !== routeId));
     }
   };
 
+  // One-time refresh on component mount
+  useEffect(() => {
+    onRefresh();
+    // No periodic refresh to avoid infinite loops
+  }, []);  // Empty dependency array to run only once
+  
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView 
@@ -82,8 +126,8 @@ export default function FavoritesScreen() {
           
           {servicesLoading ? (
             <LoadingIndicator message="Loading your favorites..." />
-          ) : favoriteServices.length > 0 ? (
-            favoriteServices.map((service) => (
+          ) : displayedServices.length > 0 ? (
+            displayedServices.map((service) => (
               <RouteCard
                 key={service.id}
                 type={service.type}

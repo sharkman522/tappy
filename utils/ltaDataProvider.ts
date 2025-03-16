@@ -412,12 +412,41 @@ export const useFavorites = () => {
 
   // Toggle favorite status
   const toggleFavorite = useCallback(async (routeId: string) => {
-    if (favorites.includes(routeId)) {
-      await removeFavorite(routeId);
-    } else {
-      await addFavorite(routeId);
+    try {
+      console.log('Toggling favorite for route:', routeId);
+      
+      // Check current state directly from storage to avoid stale state
+      const currentFavorites = await ltaService.getFavoriteRoutes();
+      console.log('Current favorites from storage:', currentFavorites);
+      const isFavorite = currentFavorites.includes(routeId);
+      console.log('Is currently favorite:', isFavorite, 'for route:', routeId);
+      
+      // Perform the appropriate action based on current state
+      if (isFavorite) {
+        console.log('Removing favorite:', routeId);
+        await ltaService.removeFavoriteRoute(routeId);
+      } else {
+        console.log('Adding favorite:', routeId);
+        await ltaService.addFavoriteRoute(routeId);
+      }
+      
+      // Verify the change by getting fresh data
+      const updatedFavorites = await ltaService.getFavoriteRoutes();
+      console.log('Updated favorites after toggle:', updatedFavorites);
+      
+      // Update local state with fresh data
+      setFavorites(updatedFavorites);
+      
+      // Double check the new state
+      const newIsFavorite = updatedFavorites.includes(routeId);
+      console.log('New favorite state:', newIsFavorite, 'for route:', routeId);
+      
+      return newIsFavorite; // Return the actual new state, not the inverse of the old state
+    } catch (error) {
+      console.error('Error in toggleFavorite:', error);
+      return null; // Return null to indicate error
     }
-  }, [favorites, addFavorite, removeFavorite]);
+  }, []); // No dependencies to avoid stale closures
 
   return { 
     favorites, 

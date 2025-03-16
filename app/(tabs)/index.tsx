@@ -55,6 +55,7 @@ export default function HomeScreen() {
     servicesError,
     refreshServices,
     toggleFavorite,
+    favorites,
     
     // Search related
     searchQuery,
@@ -67,8 +68,13 @@ export default function HomeScreen() {
     clearSearchHistory
   } = useLTA();
 
-  // Filter favorite services
-  const favoriteServices = nearbyServices.filter(service => service.isFavorite);
+  // Filter favorite services - use both the isFavorite flag and the favorites array
+  const favoriteServices = nearbyServices.filter(service => 
+    service.isFavorite || favorites.includes(service.id)
+  );
+  
+  // Debug log
+  console.log('Home screen - Current favorites:', favorites.length, 'Displayed services:', favoriteServices.length);
 
   // Function to get bus stop name from code
   const getBusStopName = useCallback(async (code: string) => {
@@ -252,25 +258,82 @@ export default function HomeScreen() {
     }
   };
 
-  const handleSelectBusService = (service: any) => {
+  const handleSelectBusService = async (service: any) => {
     console.log(`Selected bus service:`, service);
-    toggleFavorite(service.id);
+    
+    // Check current favorite status
+    const isFavorite = favorites.includes(service.id);
+    console.log('Current favorite status:', isFavorite, 'for service:', service.id);
+    
+    // Create a modified copy of the service with updated favorite status
+    const updatedService = {...service, isFavorite: !isFavorite};
+    
+    // Force immediate UI update by directly modifying the service in nearbyServices
+    const index = nearbyServices.findIndex(s => s.id === service.id);
+    if (index !== -1) {
+      // Create a new array with the updated service
+      const updatedServices = [...nearbyServices];
+      updatedServices[index] = updatedService;
+      
+      // Force re-render by updating search query (this is a hack but works)
+      setSearchQuery(searchQuery + ' ');
+      setTimeout(() => setSearchQuery(searchQuery.trim()), 10);
+    }
+    
+    // Toggle favorite status in storage
+    await toggleFavorite(service.id);
+    
+    // Force a full refresh after a delay
+    setTimeout(() => {
+      refreshServices();
+    }, 500);
   };
 
-  const handleSelectTrainStation = (station: any) => {
+  const handleSelectTrainStation = async (station: any) => {
     console.log(`Selected train station:`, station);
     // Create a service-like object for the train station
+    const trainServiceId = `train-${station.StationCode}`;
+    
+    // Check current favorite status
+    const isFavorite = favorites.includes(trainServiceId);
+    console.log('Current favorite status:', isFavorite, 'for train station:', trainServiceId);
+    
+    // Create a train service object with the updated favorite status
     const trainService = {
-      id: `train-${station.StationCode}`,
-      type: 'train',
+      id: trainServiceId,
+      type: 'train' as 'train', // Type assertion to fix type error
       routeNumber: station.Line,
       destination: station.StationName,
       time: 'View schedule',
-      isFavorite: favoriteServices.some(fav => fav.id === `train-${station.StationCode}`)
+      isFavorite: !isFavorite // Toggle the favorite status for immediate UI feedback
     };
     
-    // Toggle favorite instead of navigating
-    toggleFavorite(trainService.id);
+    // Find if this train service already exists in nearbyServices
+    const index = nearbyServices.findIndex(s => s.id === trainServiceId);
+    if (index !== -1) {
+      // Update existing service
+      const updatedServices = [...nearbyServices];
+      updatedServices[index] = trainService;
+      
+      // Force re-render
+      setSearchQuery(searchQuery + ' ');
+      setTimeout(() => setSearchQuery(searchQuery.trim()), 10);
+    } else {
+      // Add this train service to the list temporarily
+      const updatedServices = [...nearbyServices, trainService];
+      
+      // Force re-render
+      setSearchQuery(searchQuery + ' ');
+      setTimeout(() => setSearchQuery(searchQuery.trim()), 10);
+    }
+    
+    // Toggle favorite in storage
+    await toggleFavorite(trainServiceId);
+    
+    // Force a full refresh after a delay
+    setTimeout(() => {
+      refreshServices();
+    }, 500);
   };
 
   return (

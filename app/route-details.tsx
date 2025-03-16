@@ -156,9 +156,32 @@ export default function RouteDetailsScreen() {
   // Toggle favorite status
   const handleToggleFavorite = async () => {
     try {
+      console.log('Toggling favorite for route in route-details:', routeId);
+      
+      // Check current favorite status
+      const isFavorite = favorites.includes(routeId as string);
+      console.log('Current favorite status:', isFavorite);
+      
+      // Update UI immediately for better UX
+      setTappyMessage(isFavorite ? 
+        "Removing from favorites..." : 
+        "Adding to favorites...");
+      
+      // Toggle favorite status
       await toggleFavorite(routeId as string);
+      
+      // Update UI with confirmation message
+      setTappyMessage(isFavorite ? 
+        "This route has been removed from your favorites." : 
+        "This route has been added to your favorites!");
+      
+      // Reset message after 3 seconds
+      setTimeout(() => {
+        setTappyMessage("Which stop would you like to travel to?");
+      }, 3000);
     } catch (error) {
       console.error('Error toggling favorite:', error);
+      setTappyMessage("Sorry, I couldn't update your favorites right now.");
     }
   };
   

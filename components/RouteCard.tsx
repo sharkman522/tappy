@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Animated } from 'react-native';
 import { ChevronRight, Bus, Brain as Train, Heart } from 'lucide-react-native';
 
 interface RouteCardProps {
@@ -23,6 +23,10 @@ export default function RouteCard({
   onPress,
   onFavoriteToggle,
 }: RouteCardProps) {
+  // Animation value for heart icon
+  const [heartScale] = useState(new Animated.Value(1));
+  // Local state to track favorite status for immediate UI feedback
+  const [localIsFavorite, setLocalIsFavorite] = useState(isFavorite);
   return (
     <TouchableOpacity style={styles.container} onPress={onPress}>
       <View style={styles.iconContainer}>
@@ -49,14 +53,35 @@ export default function RouteCard({
           style={styles.favoriteButton}
           onPress={(e) => {
             e.stopPropagation();
+            
+            // Update local state immediately for UI feedback
+            setLocalIsFavorite(!localIsFavorite);
+            
+            // Animate heart icon for immediate feedback
+            Animated.sequence([
+              Animated.timing(heartScale, {
+                toValue: 1.3,
+                duration: 100,
+                useNativeDriver: true
+              }),
+              Animated.timing(heartScale, {
+                toValue: 1,
+                duration: 100,
+                useNativeDriver: true
+              })
+            ]).start();
+            
+            // Toggle favorite state in parent component
             onFavoriteToggle();
           }}
         >
-          <Heart 
-            size={22} 
-            color={isFavorite ? '#FF8A65' : '#D1D5DB'} 
-            fill={isFavorite ? '#FF8A65' : 'none'}
-          />
+          <Animated.View style={{ transform: [{ scale: heartScale }] }}>
+            <Heart 
+              size={22} 
+              color={localIsFavorite ? '#FF8A65' : '#D1D5DB'} 
+              fill={localIsFavorite ? '#FF8A65' : 'none'}
+            />
+          </Animated.View>
         </TouchableOpacity>
       )}
       
