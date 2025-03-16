@@ -220,8 +220,8 @@ export default function MapWeb({
                         backgroundColor: color,
                         borderWidth: (isDestination || isCurrent) ? 3 : 0,
                         borderColor: color,
-                        width: isDestination ? 18 : 12,
-                        height: isDestination ? 18 : 12,
+                        width: isDestination ? 12 : 12,
+                        height: isDestination ? 12 : 12,
                       }
                     ]} 
                   />
