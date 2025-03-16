@@ -308,7 +308,7 @@ export default function JourneyTrackingScreen() {
           <Text style={styles.statusText}>{journeyStatus}</Text>
           <View style={styles.progressContainer}>
             <Text style={styles.progressText}>
-              {currentStopIndex + 1} of {stops.length} stops
+              {currentStopIndex >= startingStopIndex ? 1 + (currentStopIndex - startingStopIndex) : 1} of {stops.length - startingStopIndex} stops
             </Text>
             <Text style={styles.destinationText}>
               Destination: {stopName} <MapPin size={14} color="#FF8A65" />

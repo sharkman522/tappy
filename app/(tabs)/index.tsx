@@ -10,7 +10,8 @@ import {
   KeyboardAvoidingView,
   Platform,
   Modal,
-  FlatList
+  FlatList,
+  Dimensions
 } from 'react-native';
 import { MapPin, Train } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -208,40 +209,68 @@ export default function HomeScreen() {
     }
   }, [refreshLocation, refreshServices]);
 
+  // Track selected search result
+  const [selectedSearchStop, setSelectedSearchStop] = useState<string | null>(null);
+  const [searchStopServices, setSearchStopServices] = useState<any[]>([]);
+  const [searchStopServicesLoading, setSearchStopServicesLoading] = useState(false);
+
   // Handle search result selection
-  const handleSelectBusStop = (stopId: string, stopName: string) => {
+  const handleSelectBusStop = async (stopId: string, stopName: string) => {
     console.log(`Selected bus stop: ${stopId} - ${stopName}`);
-    // Navigate to bus stop detail page
-    router.push({
-      pathname: '/route-details',
-      params: { 
-        busStopCode: stopId,
-        description: stopName,
-        type: 'busStop'
+    setSelectedSearchStop(stopId);
+    setSearchStopServicesLoading(true);
+    setShowSearchResults(false); // Hide the dropdown results
+    
+    try {
+      // Fetch bus arrivals for this stop
+      const arrivals = await ltaService.getBusArrivals(stopId);
+      const services = [];
+      
+      // Format arrivals as services
+      for (const arrival of arrivals) {
+        if (arrival.NextBus && arrival.NextBus.EstimatedArrival) {
+          const id = `${arrival.ServiceNo}-${stopId}`;
+          const destinationName = await ltaService.getBusStopName(arrival.NextBus.DestinationCode);
+          
+          services.push({
+            id,
+            type: 'bus',
+            routeNumber: `Bus ${arrival.ServiceNo}`,
+            destination: destinationName,
+            time: `Next in ${ltaService.formatArrivalTime(arrival.NextBus.EstimatedArrival)}`,
+            isFavorite: favoriteServices.some(fav => fav.id === id)
+          });
+        }
       }
-    });
-    setShowSearchResults(false);
+      
+      setSearchStopServices(services);
+    } catch (error) {
+      console.error(`Error getting bus arrivals for stop ${stopId}:`, error);
+      Alert.alert('Error', 'Could not fetch bus services for this stop');
+    } finally {
+      setSearchStopServicesLoading(false);
+    }
   };
 
   const handleSelectBusService = (service: any) => {
     console.log(`Selected bus service:`, service);
-    handleRoutePress(service);
-    setShowSearchResults(false);
+    toggleFavorite(service.id);
   };
 
   const handleSelectTrainStation = (station: any) => {
     console.log(`Selected train station:`, station);
-    // Navigate to train station detail page
-    router.push({
-      pathname: '/route-details',
-      params: { 
-        stationCode: station.StationCode,
-        stationName: station.StationName,
-        line: station.Line,
-        type: 'trainStation'
-      }
-    });
-    setShowSearchResults(false);
+    // Create a service-like object for the train station
+    const trainService = {
+      id: `train-${station.StationCode}`,
+      type: 'train',
+      routeNumber: station.Line,
+      destination: station.StationName,
+      time: 'View schedule',
+      isFavorite: favoriteServices.some(fav => fav.id === `train-${station.StationCode}`)
+    };
+    
+    // Toggle favorite instead of navigating
+    toggleFavorite(trainService.id);
   };
 
   return (
@@ -300,7 +329,7 @@ export default function HomeScreen() {
             {searchLoading ? (
               <LoadingIndicator message="Searching..." />
             ) : (
-              <>
+              <ScrollView style={{maxHeight: Dimensions.get('window').height * 0.4}}>
                 {/* Bus Stops Section */}
                 {searchResults.busStops.length > 0 && (
                   <View style={styles.resultSection}>
@@ -335,7 +364,7 @@ export default function HomeScreen() {
                         destination={service.destination}
                         time={service.time}
                         isFavorite={service.isFavorite}
-                        onPress={() => handleSelectBusService(service)}
+                        onPress={() => handleRoutePress(service)}
                         onFavoriteToggle={() => toggleFavorite(service.id)}
                       />
                     ))}
@@ -370,7 +399,7 @@ export default function HomeScreen() {
                  searchResults.trainStations.length === 0 && (
                   <Text style={styles.emptyText}>No results found matching your search.</Text>
                 )}
-              </>
+              </ScrollView>
             )}
             
             {/* Favorites Section in search results */}
@@ -430,6 +459,37 @@ export default function HomeScreen() {
                 <Text style={styles.emptyText}>No favorites yet! Tap the heart icon on any route to add it to your favorites.</Text>
               )}
             </View>
+            
+            {/* Search Results Section - Only shown when a search stop is selected */}
+            {selectedSearchStop && (
+              <View style={styles.sectionContainer}>
+                <Text style={styles.sectionTitle}>Search Results</Text>
+                {searchStopServicesLoading ? (
+                  <LoadingIndicator message="Loading services..." />
+                ) : searchStopServices.length > 0 ? (
+                  <View style={styles.busStopSection}>
+                    <Text style={styles.busStopName}>
+                      {searchResults.busStops.find(stop => stop.BusStopCode === selectedSearchStop)?.Description || 'Bus Stop'} 
+                      ({selectedSearchStop})
+                    </Text>
+                    {searchStopServices.map(service => (
+                      <RouteCard
+                        key={service.id}
+                        type={service.type}
+                        routeNumber={service.routeNumber}
+                        destination={service.destination}
+                        time={service.time}
+                        isFavorite={service.isFavorite}
+                        onPress={() => handleRoutePress(service)}
+                        onFavoriteToggle={() => toggleFavorite(service.id)}
+                      />
+                    ))}
+                  </View>
+                ) : (
+                  <Text style={styles.emptyText}>No services available at this time.</Text>
+                )}
+              </View>
+            )}
             
             {/* Nearby Routes Section */}
             <View style={styles.sectionContainer}>
@@ -633,6 +693,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 15,
     marginBottom: 8,
     marginTop: 5,
+  },
+  busStopServices: {
+    paddingHorizontal: 15,
+    paddingTop: 5,
   },
   // Tab styles
   tabContainer: {

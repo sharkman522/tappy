@@ -205,7 +205,7 @@ export default function MapWeb({
           />
         </View>
         <Text style={styles.progressText}>
-          {currentStopIndex + 1} of {stops.length} stops
+          1 of {stops.length - currentStopIndex} stops
         </Text>
       </View>
     </View>
