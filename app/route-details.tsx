@@ -71,8 +71,11 @@ export default function RouteDetailsScreen() {
   const contentType = type as string || (routeNumber ? 'bus' : busStopCode ? 'busStop' : 'trainStation');
   console.log('[RouteDetailsScreen] Determined content type:', contentType);
   
+  // State to toggle showing past stops
+  const [showPastStops, setShowPastStops] = useState(false);
+  
   // Get stops for this route (only for bus routes)
-  const { stops, loading, error, directions, selectedDirection, changeDirection } = useRouteStops(
+  const { stops, loading, error, directions, selectedDirection, changeDirection, allStops } = useRouteStops(
     contentType === 'bus' ? (serviceNumber as string || '') : ''
   );
   console.log('[RouteDetailsScreen] useRouteStops result:', { 
@@ -256,6 +259,23 @@ export default function RouteDetailsScreen() {
               </View>
             )}
             
+            {/* Past Stops Toggle */}
+            {contentType === 'bus' && allStops && allStops.some(stop => stop.isPassed) && (
+              <View style={styles.pastStopsToggle}>
+                <TouchableOpacity 
+                  style={styles.toggleButton}
+                  onPress={() => setShowPastStops(!showPastStops)}
+                >
+                  <Text style={styles.toggleButtonText}>
+                    {showPastStops ? 'Hide Past Stops' : 'Show Past Stops'}
+                  </Text>
+                </TouchableOpacity>
+                <Text style={styles.toggleHint}>
+                  {showPastStops ? 'Showing all stops' : 'Showing upcoming stops only'}
+                </Text>
+              </View>
+            )}
+            
             {loading ? (
               <LoadingIndicator message="Loading stops..." />
             ) : error ? (
@@ -263,13 +283,15 @@ export default function RouteDetailsScreen() {
                 {error}
                 Could not load stops for this route. Please try again later.
               </Text>
-            ) : stops.length > 0 ? (
-              stops.map((stop, index) => (
+            ) : stops.length > 0 || (allStops && allStops.length > 0) ? (
+              // Show either filtered stops (future only) or all stops based on toggle
+              (showPastStops && allStops ? allStops : stops).map((stop, index) => (
                 <StopCard
                   key={`${stop.id}-${stop.stopSequence || index}`}
                   stopName={stop.name}
                   estimatedTime={stop.time}
                   isDestination={stop.id === selectedStop}
+                  isPast={stop.isPassed}
                   onPress={() => handleStopSelect(stop.id, stop.name)}
                 />
               ))

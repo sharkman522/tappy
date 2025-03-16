@@ -98,6 +98,8 @@ export interface AppBusStop extends BusStop {
   stopSequence?: number; // Sequence number of the stop in the route
   direction?: number; // Direction of the bus route
   time?: string; // Estimated travel time
+  estimatedMinutes?: number; // Raw minutes value for the estimated time
+  isPassed?: boolean; // Whether this stop has already been passed by the bus
 }
 
 export interface AppBusService {

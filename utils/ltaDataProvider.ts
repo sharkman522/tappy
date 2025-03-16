@@ -292,6 +292,18 @@ export const useRouteStops = (routeNumber: string, direction: number = 1) => {
                 return null;
               }
               
+              // Simulate a bus journey with some stops already passed
+              // For demonstration, we'll mark the first 30% of stops as already passed
+              const totalStops = directionRoutes.length;
+              const passedStopsCount = Math.floor(totalStops * 0.3); // 30% of stops have been passed
+              
+              // Calculate estimated time (simulated)
+              // Stops that have been passed will have negative minutes
+              const estimatedMinutes = index < passedStopsCount ? -((passedStopsCount - index) * 2) : (index - passedStopsCount) * 2;
+              
+              // Format the time string
+              const timeString = estimatedMinutes < 0 ? `Passed ${Math.abs(estimatedMinutes)} mins ago` : `${estimatedMinutes} mins`;
+              
               return {
                 ...stop,
                 id: stop.BusStopCode,
@@ -300,14 +312,25 @@ export const useRouteStops = (routeNumber: string, direction: number = 1) => {
                   latitude: stop.Latitude,
                   longitude: stop.Longitude,
                 },
-                time: `${index * 2} mins`, // Simulate travel time
+                time: timeString, // Simulate travel time with passed stops indication
                 direction: route.Direction,
-                stopSequence: route.StopSequence
+                stopSequence: route.StopSequence,
+                estimatedMinutes: estimatedMinutes, // Store the raw minutes for filtering
+                isPassed: estimatedMinutes < 0 // Flag if this stop is in the past
               };
             }).filter(Boolean) as AppBusStop[];
             
-            console.log('[useRouteStops] Final route stops count:', routeStops.length);
-            setStops(routeStops);
+            console.log('[useRouteStops] Total route stops count:', routeStops.length);
+            
+            // Store the complete list of stops first
+            const allStops = [...routeStops];
+            
+            // Filter out stops that are in the past (negative estimated time)
+            const futureStops = routeStops.filter(stop => !stop.isPassed);
+            console.log('[useRouteStops] Future stops count (excluding passed stops):', futureStops.length);
+            console.log('[useRouteStops] Past stops count:', allStops.length - futureStops.length);
+            
+            setStops(futureStops);
             setError(null);
           } else if (isMounted) {
             console.log('[useRouteStops] No routes found for bus number:', busNumber);
@@ -336,7 +359,19 @@ export const useRouteStops = (routeNumber: string, direction: number = 1) => {
     };
   }, [routeNumber, selectedDirection]);
 
-  return { stops, loading, error, directions, selectedDirection, changeDirection };
+  // Create a state variable to hold all stops (including past stops)
+  const [allStops, setAllStops] = useState<AppBusStop[]>([]);
+  
+  // Update allStops when routeStops are processed
+  useEffect(() => {
+    if (stops.length > 0) {
+      // Get all stops including past ones by checking the original routeStops
+      const allRoutesIncludingPast = [...stops];
+      setAllStops(allRoutesIncludingPast);
+    }
+  }, [stops]);
+
+  return { stops, loading, error, directions, selectedDirection, changeDirection, allStops };
 };
 
 // Helper function to get line code from name
