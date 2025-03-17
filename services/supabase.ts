@@ -86,35 +86,42 @@ export const ltaApi = {
         }
       }
       
-      // If no valid cache, fetch all routes by paginating
+      // If no valid cache, fetch all routes in parallel using Promise.all
       let allRoutes: BusRoute[] = [];
-      let currentSkip = 0;
-      let hasMoreData = true;
       
-      while (hasMoreData) {
-        const { data, error } = await supabase.functions.invoke('lta-proxy', {
+      // Create an array of skip values from 0 to 30000 in increments of 500
+      const skipValues = [];
+      for (let skip = 0; skip <= 30000; skip += 500) {
+        skipValues.push(skip);
+      }
+      
+      // Create an array of promises for each skip value
+      const fetchPromises = skipValues.map(skip => 
+        supabase.functions.invoke('lta-proxy', {
           body: {
             endpoint: 'BusRoutes',
             method: 'GET',
-            params: { $skip: currentSkip.toString() }
+            params: { $skip: skip.toString() }
           }
-        });
-
-        console.log({data2: data})
-
-        if (error) throw error;
+        })
+      );
+      
+      // Execute all promises in parallel
+      console.log(`Fetching ${fetchPromises.length} batches of bus routes in parallel...`);
+      const results = await Promise.all(fetchPromises);
+      
+      // Process the results
+      for (const result of results) {
+        const { data, error } = result;
+        
+        if (error) {
+          console.error('Error fetching bus routes:', error);
+          continue; // Skip this batch if there's an error
+        }
         
         if (data && data.value && data.value.length > 0) {
           allRoutes = [...allRoutes, ...data.value];
-          currentSkip += data.value.length;
-        } else {
-          hasMoreData = false;
-        }
-        
-        // Safety check to prevent infinite loops
-        // Set the limit to match the expected total data size of 5975570
-        if (currentSkip >= 12000) {
-          hasMoreData = false;
+          console.log(`Fetched ${data.value.length} routes, total now: ${allRoutes.length}`);
         }
       }
       
