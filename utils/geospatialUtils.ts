@@ -81,51 +81,58 @@ export const findKNearestBusStops = (
 /**
  * Implementation of K-nearest neighbors algorithm for train stations
  * 
- * @param userLat - User's latitude
- * @param userLon - User's longitude
  * @param trainStations - Array of train stations
+ * @param userLocation - User's location {latitude, longitude}
  * @param k - Number of nearest neighbors to return (default: 5)
+ * @param maxDistanceMeters - Maximum distance in meters (optional)
  * @returns Array of k nearest train stations with distance information
  */
 export const findKNearestTrainStations = (
-  userLat: number,
-  userLon: number,
   trainStations: AppTrainStation[],
-  k: number = 5
+  userLocation: { latitude: number, longitude: number },
+  k: number = 5,
+  maxDistanceMeters?: number
 ): AppTrainStation[] => {
   // Calculate distances for all train stations
   const stationsWithDistance = trainStations.map(station => {
     const distance = haversineDistance(
-      userLat,
-      userLon,
+      userLocation.latitude,
+      userLocation.longitude,
       station.coordinates.latitude,
       station.coordinates.longitude
     );
     return { ...station, distance };
   });
   
+  // Filter by max distance if provided (convert from meters to km)
+  let filtered = stationsWithDistance;
+  if (maxDistanceMeters) {
+    const maxDistanceKm = maxDistanceMeters / 1000;
+    filtered = stationsWithDistance.filter(station => station.distance <= maxDistanceKm);
+  }
+  
   // Sort by distance (closest first) and take the k nearest
-  return stationsWithDistance
+  return filtered
     .sort((a, b) => a.distance - b.distance)
     .slice(0, k);
 };
 
 /**
- * Creates a spatial index for bus stops using a simplified grid-based approach
+ * Creates a spatial index for stops (bus stops or train stations) using a simplified grid-based approach
  * This is more efficient than computing distances for all stops when dealing with large datasets
  * 
- * @param busStops - Array of bus stops to index
+ * @param stops - Array of stops to index (bus stops or train stations)
  * @param gridSize - Size of grid cells in degrees (default: 0.01, roughly 1km)
  * @returns A spatial index for quick proximity lookups
  */
-export const createBusStopSpatialIndex = (
-  busStops: AppBusStop[],
+export const createSpatialIndex = <T extends { coordinates: { latitude: number, longitude: number } }>(
+  stops: T[],
   gridSize: number = 0.01
 ) => {
-  const gridIndex: { [key: string]: AppBusStop[] } = {};
+  const gridIndex: { [key: string]: T[] } = {};
   
-  // Place each bus stop in a grid cell
-  busStops.forEach(stop => {
+  // Place each stop in a grid cell
+  stops.forEach(stop => {
     // Calculate grid cell coordinates
     const gridX = Math.floor(stop.coordinates.longitude / gridSize);
     const gridY = Math.floor(stop.coordinates.latitude / gridSize);
@@ -139,14 +146,14 @@ export const createBusStopSpatialIndex = (
   });
   
   /**
-   * Find nearby bus stops using the spatial index
+   * Find nearby stops using the spatial index
    * 
    * @param lat - Latitude to search around
    * @param lon - Longitude to search around
    * @param radiusKm - Search radius in kilometers
-   * @returns Array of bus stops within the radius
+   * @returns Array of stops within the radius
    */
-  const findNearby = (lat: number, lon: number, radiusKm: number): AppBusStop[] => {
+  const findNearby = (lat: number, lon: number, radiusKm: number): (T & { distance: number })[] => {
     // Convert radius to approximate grid cells
     // 0.01 degrees is roughly 1km at the equator
     const gridRadius = Math.ceil(radiusKm / (gridSize * 111));
@@ -156,7 +163,7 @@ export const createBusStopSpatialIndex = (
     const userGridY = Math.floor(lat / gridSize);
     
     // Collect stops from nearby grid cells
-    const nearbyStops: AppBusStop[] = [];
+    const nearbyStops: T[] = [];
     
     // Search in surrounding grid cells
     for (let x = userGridX - gridRadius; x <= userGridX + gridRadius; x++) {
@@ -177,14 +184,42 @@ export const createBusStopSpatialIndex = (
           stop.coordinates.latitude,
           stop.coordinates.longitude
         );
+        // Create a new object with all original properties plus the distance
+        // This ensures we keep properties like BusStopCode, Description, etc.
         return { ...stop, distance };
       })
       .filter(stop => stop.distance <= radiusKm)
       .sort((a, b) => a.distance - b.distance);
   };
   
+  /**
+   * Find the k nearest stops to a point
+   * 
+   * @param point - Point to search around {x: longitude, y: latitude}
+   * @param k - Number of nearest stops to return
+   * @param maxDistance - Maximum distance in meters
+   * @returns Array of nearest stops with distance information
+   */
+  const nearest = (point: { x: number, y: number }, k: number = 10, maxDistance: number = 1000): T[] => {
+    // Convert maxDistance from meters to kilometers
+    const radiusKm = maxDistance / 1000;
+    
+    // Find all stops within the radius
+    const nearbyStops = findNearby(point.y, point.x, radiusKm);
+    
+    // Return the k nearest stops
+    // We're returning the original stop objects with distance added
+    return nearbyStops
+      .slice(0, k)
+      .map(stop => {
+        // Create a new object with the distance property
+        return stop as T;
+      });
+  };
+  
   return {
     findNearby,
+    nearest,
     // Return the raw index for advanced usage
     gridIndex
   };
@@ -240,30 +275,57 @@ export const findClosestStop = <T extends { id: string; coordinates: { latitude:
   closestStopIndex: number; 
   stopsWithDistance: (T & { distance: number })[] 
 } => {
+  // Performance optimization: Log the start time
+  const startTime = Date.now();
+  
   if (!stops || stops.length === 0) {
     return { closestStop: null, closestStopIndex: -1, stopsWithDistance: [] };
   }
   
-  // Calculate distances for all stops
-  const stopsWithDistance = stops.map(stop => {
-    const distance = haversineDistance(
-      userLat,
-      userLon,
-      stop.coordinates.latitude,
-      stop.coordinates.longitude
-    );
-    return { ...stop, distance };
-  });
+  // Create a temporary spatial index for these stops if we have more than 20 stops
+  // This significantly improves performance for large datasets
+  let stopsWithDistance: (T & { distance: number })[];
   
-  // Sort by distance (closest first)
-  const sortedStops = [...stopsWithDistance].sort((a, b) => a.distance - b.distance);
+  if (stops.length > 20) {
+    // Use spatial indexing for better performance with larger datasets
+    console.log(`[findClosestStop] Using spatial index for ${stops.length} stops`);
+    const tempIndex = createSpatialIndex(stops);
+    
+    // Get the 10 nearest stops using the spatial index (much faster than calculating all distances)
+    const nearestStops = tempIndex.nearest(
+      { x: userLon, y: userLat },
+      10, // We only need a small number of nearest stops
+      maxDistanceKm * 1000 // Convert to meters
+    ) as (T & { distance: number })[];
+    
+    // Sort by distance
+    stopsWithDistance = nearestStops.sort((a, b) => a.distance - b.distance);
+  } else {
+    // For small datasets, just calculate all distances directly
+    // Calculate distances for all stops
+    stopsWithDistance = stops.map(stop => {
+      const distance = haversineDistance(
+        userLat,
+        userLon,
+        stop.coordinates.latitude,
+        stop.coordinates.longitude
+      );
+      return { ...stop, distance };
+    }).sort((a, b) => a.distance - b.distance);
+  }
   
   // Find the closest stop
-  const closestStop = sortedStops[0];
+  const closestStop = stopsWithDistance[0];
   
   // If the closest stop is too far away, don't consider it as "current"
-  if (closestStop && closestStop.distance > maxDistanceKm) {
-    console.log(`Closest stop is too far away: ${closestStop.distance.toFixed(2)}km > ${maxDistanceKm}km threshold`);
+  if (!closestStop || closestStop.distance > maxDistanceKm) {
+    const distanceMsg = closestStop ? `${closestStop.distance.toFixed(2)}km > ${maxDistanceKm}km threshold` : 'No stops found';
+    console.log(`Closest stop is too far away: ${distanceMsg}`);
+    
+    // Performance optimization: Log the execution time
+    const endTime = Date.now();
+    console.log(`[findClosestStop] Execution time: ${endTime - startTime}ms`);
+    
     return {
       closestStop: null,
       closestStopIndex: -1,
@@ -273,6 +335,10 @@ export const findClosestStop = <T extends { id: string; coordinates: { latitude:
   
   // Find the index of the closest stop in the original stops array
   const closestStopIndex = stops.findIndex(stop => stop.id === closestStop.id);
+  
+  // Performance optimization: Log the execution time
+  const endTime = Date.now();
+  console.log(`[findClosestStop] Found closest stop in ${endTime - startTime}ms (distance: ${closestStop.distance.toFixed(2)}km)`);
   
   return {
     closestStop,

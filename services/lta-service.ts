@@ -1,5 +1,3 @@
-import * as SecureStore from 'expo-secure-store';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import { 
   DataMallResponse, 
@@ -20,293 +18,290 @@ import {
   haversineDistance,
   findKNearestBusStops,
   findKNearestTrainStations,
-  createBusStopSpatialIndex,
+  createSpatialIndex,
   calculateBearing,
   isPointNearPath
 } from '../utils/geospatialUtils';
+import {
+  CACHE_KEYS,
+  CACHE_TTL,
+  saveToCache,
+  getFromCache,
+  clearCache,
+  deduplicateRequest
+} from '../utils/cacheUtils';
 
-// Cache keys
-const CACHE_KEYS = {
-  BUS_STOPS: 'lta_bus_stops',
-  BUS_SERVICES: 'lta_bus_services',
-  BUS_ROUTES: 'lta_bus_routes',
-  TRAIN_STATIONS: 'lta_train_stations',
-  FAVORITES: 'lta_favorites',
-  SEARCH_HISTORY: 'lta_search_history',
-};
-
-// Cache TTL in milliseconds (24 hours)
-const CACHE_TTL = 24 * 60 * 60 * 1000;
-
-// Cache timestamp key suffix
-const TIMESTAMP_SUFFIX = '_timestamp';
-
-// Helper function to store data based on platform
-const storeData = async (key: string, value: string): Promise<void> => {
-  try {
-    if (Platform.OS === 'web') {
-      await AsyncStorage.setItem(key, value);
-    } else {
-      await SecureStore.setItemAsync(key, value);
-    }
-  } catch (error) {
-    console.error(`Error storing data for key ${key}:`, error);
-    // Fallback to AsyncStorage if SecureStore fails
-    if (Platform.OS !== 'web') {
-      try {
-        await AsyncStorage.setItem(key, value);
-      } catch (fallbackError) {
-        console.error(`Fallback storage also failed for key ${key}:`, fallbackError);
-      }
-    }
-  }
-};
-
-// Helper function to retrieve data based on platform
-const retrieveData = async (key: string): Promise<string | null> => {
-  try {
-    if (Platform.OS === 'web') {
-      return await AsyncStorage.getItem(key);
-    } else {
-      const value = await SecureStore.getItemAsync(key);
-      if (value !== null) {
-        return value;
-      }
-      // If SecureStore returns null, try AsyncStorage as fallback
-      return await AsyncStorage.getItem(key);
-    }
-  } catch (error) {
-    console.error(`Error retrieving data for key ${key}:`, error);
-    // If SecureStore fails, try AsyncStorage
-    if (Platform.OS !== 'web') {
-      try {
-        return await AsyncStorage.getItem(key);
-      } catch (fallbackError) {
-        console.error(`Fallback retrieval also failed for key ${key}:`, fallbackError);
-        return null;
-      }
-    }
-    return null;
-  }
-};
-
-// Helper function to check if cache is valid
-const isCacheValid = async (key: string): Promise<boolean> => {
-  const timestamp = await retrieveData(key + TIMESTAMP_SUFFIX);
-  if (!timestamp) return false;
-  
-  const cachedTime = parseInt(timestamp, 10);
-  return Date.now() - cachedTime < CACHE_TTL;
-};
-
-// Helper function to save data to cache
-const saveToCache = async <T>(key: string, data: T): Promise<void> => {
-  await storeData(key, JSON.stringify(data));
-  await storeData(key + TIMESTAMP_SUFFIX, Date.now().toString());
-};
-
-// Helper function to get data from cache
-const getFromCache = async <T>(key: string): Promise<T | null> => {
-  const isValid = await isCacheValid(key);
-  if (!isValid) return null;
-  
-  const data = await retrieveData(key);
-  return data ? JSON.parse(data) as T : null;
-};
+// Spatial indices for fast geospatial queries
+let busStopSpatialIndex: ReturnType<typeof createSpatialIndex<AppBusStop>> | null = null;
+let trainStationSpatialIndex: ReturnType<typeof createSpatialIndex<AppTrainStation>> | null = null;
 
 // Bus Services
 export const getBusStops = async (): Promise<AppBusStop[]> => {
-  // Try to get from cache first
-  const cached = await getFromCache<AppBusStop[]>(CACHE_KEYS.BUS_STOPS);
-  if (cached) return cached;
-  
-  // Fetch all bus stops (need to handle pagination since API returns max 500 items per request)
-  let allBusStops: BusStop[] = [];
-  let skip = 0;
-  const limit = 500;
-  
-  while (true) {
-    try {
-      // Use Supabase RPC function instead of direct API call
-      const response = await ltaApi.getBusStops(skip);
-      const busStops = response.value;
+  return deduplicateRequest<AppBusStop[]>('getBusStops', async () => {
+    console.log('[getBusStops] Checking cache for bus stops');
+    // Try to get from cache first with LONG TTL (24 hours)
+    const cached = await getFromCache<AppBusStop[]>(CACHE_KEYS.BUS_STOPS, CACHE_TTL.LONG);
+    if (cached) {
+      console.log(`[getBusStops] Using cached data with ${cached.length} bus stops`);
       
-      if (busStops.length === 0) break;
+      // Initialize spatial index if not already done
+      if (!busStopSpatialIndex) {
+        console.log('[getBusStops] Creating spatial index from cached bus stops');
+        busStopSpatialIndex = createSpatialIndex<AppBusStop>(cached);
+      }
       
-      allBusStops = [...allBusStops, ...busStops];
-      skip += limit;
-      
-      // If we got less than the limit, we've reached the end
-      if (busStops.length < limit) break;
-    } catch (error) {
-      console.error('Error fetching bus stops:', error);
-      throw error;
+      return cached;
     }
-  }
-  
-  // Map to app format
-  const appBusStops: AppBusStop[] = allBusStops.map(stop => ({
-    ...stop,
-    id: stop.BusStopCode,
-    name: stop.Description, 
-    coordinates: {
-      latitude: stop.Latitude,
-      longitude: stop.Longitude
+    
+    console.log('[getBusStops] Cache miss, fetching from API');
+    // Fetch all bus stops (need to handle pagination since API returns max 500 items per request)
+    let allBusStops: BusStop[] = [];
+    let skip = 0;
+    const limit = 500;
+    
+    while (true) {
+      try {
+        console.log(`[getBusStops] Fetching batch with skip=${skip}`);
+        // Use Supabase RPC function instead of direct API call
+        const response = await ltaApi.getBusStops(skip);
+        const busStops = response.value;
+        
+        if (busStops.length === 0) break;
+        
+        allBusStops = [...allBusStops, ...busStops];
+        skip += limit;
+        
+        // If we got less than the limit, we've reached the end
+        if (busStops.length < limit) break;
+      } catch (error) {
+        console.error('Error fetching bus stops:', error);
+        throw error;
+      }
     }
-  }));
-  
-  // Save to cache
-  await saveToCache(CACHE_KEYS.BUS_STOPS, appBusStops);
-  
-  return appBusStops;
+    
+    console.log(`[getBusStops] Fetched ${allBusStops.length} bus stops from API`);
+    
+    // Map to app format
+    const appBusStops: AppBusStop[] = allBusStops.map(stop => ({
+      ...stop,
+      id: stop.BusStopCode,
+      name: stop.Description, 
+      coordinates: {
+        latitude: stop.Latitude,
+        longitude: stop.Longitude
+      }
+    }));
+    
+    // Save to cache
+    await saveToCache(CACHE_KEYS.BUS_STOPS, appBusStops);
+    
+    // Create spatial index for fast geospatial queries
+    busStopSpatialIndex = createBusStopSpatialIndex(appBusStops);
+    console.log('[getBusStops] Created spatial index for bus stops');
+    
+    return appBusStops;
+  });
 };
 
 export const getBusServices = async (): Promise<BusService[]> => {
-  // Try to get from cache first
-  const cached = await getFromCache<BusService[]>(CACHE_KEYS.BUS_SERVICES);
-  if (cached) return cached;
-  
-  // Estimated total number of bus services in Singapore (around 600-700)
-  // Using a conservative estimate of 800 to ensure we fetch all services
-  const estimatedTotalServices = 800;
-  const limit = 100; // LTA API limit per request
-  
-  // Calculate number of batches needed
-  const batchCount = Math.ceil(estimatedTotalServices / limit);
-  const batchOffsets = Array.from({ length: batchCount }, (_, i) => i * limit);
-  
-  try {
-    // Make parallel requests using Promise.all
-    const responses = await Promise.all(
-      batchOffsets.map(offset => ltaApi.getBusServices(offset))
-    );
+  return deduplicateRequest<BusService[]>('getBusServices', async () => {
+    console.log('[getBusServices] Checking cache for bus services');
+    // Try to get from cache first with LONG TTL (24 hours)
+    const cached = await getFromCache<BusService[]>(CACHE_KEYS.BUS_SERVICES, CACHE_TTL.LONG);
+    if (cached) {
+      console.log(`[getBusServices] Using cached data with ${cached.length} bus services`);
+      return cached;
+    }
     
-    // Combine all results
-    const allBusServices = responses.flatMap(response => response.value);
+    console.log('[getBusServices] Cache miss, fetching from API');
+    // Estimated total number of bus services in Singapore (around 600-700)
+    // Using a conservative estimate of 800 to ensure we fetch all services
+    const estimatedTotalServices = 800;
+    const limit = 100; // LTA API limit per request
     
-    // Save to cache
-    await saveToCache(CACHE_KEYS.BUS_SERVICES, allBusServices);
+    // Calculate number of batches needed
+    const batchCount = Math.ceil(estimatedTotalServices / limit);
+    const batchOffsets = Array.from({ length: batchCount }, (_, i) => i * limit);
     
-    return allBusServices;
-  } catch (error) {
-    console.error('Error fetching bus services:', error);
-    throw error;
-  }
+    try {
+      console.log(`[getBusServices] Making ${batchCount} parallel requests`);
+      // Make parallel requests using Promise.all
+      const responses = await Promise.all(
+        batchOffsets.map(offset => ltaApi.getBusServices(offset))
+      );
+      
+      // Combine all results
+      const allBusServices = responses.flatMap(response => response.value);
+      console.log(`[getBusServices] Fetched ${allBusServices.length} bus services from API`);
+      
+      // Save to cache
+      await saveToCache(CACHE_KEYS.BUS_SERVICES, allBusServices);
+      
+      return allBusServices;
+    } catch (error) {
+      console.error('Error fetching bus services:', error);
+      throw error;
+    }
+  });
 };
 
 export const getBusArrivals = async (busStopCode: string): Promise<BusArrival[]> => {
-  console.log(`[getBusArrivals] Fetching arrivals for bus stop: ${busStopCode}`);
-  try {
-    // Use Supabase RPC function instead of direct API call
-    const response = await ltaApi.getBusArrivals(busStopCode);
-    console.log(`[getBusArrivals] Response from API:`, response);
+  return deduplicateRequest<BusArrival[]>(`getBusArrivals_${busStopCode}`, async () => {
+    console.log(`[getBusArrivals] Fetching arrivals for bus stop: ${busStopCode}`);
     
-    const services = response.Services || [];
-    console.log(`[getBusArrivals] Extracted ${services.length} services from response`);
-    return services;
-  } catch (error) {
-    console.error(`[getBusArrivals] Error fetching bus arrivals for stop ${busStopCode}:`, error);
-    throw error;
-  }
+    // Check cache with SHORT TTL (5 minutes) for arrivals
+    const cacheKey = `${CACHE_KEYS.BUS_ARRIVALS}${busStopCode}`;
+    const cached = await getFromCache<BusArrival[]>(cacheKey, CACHE_TTL.SHORT);
+    
+    if (cached) {
+      console.log(`[getBusArrivals] Using cached arrivals for stop ${busStopCode}`);
+      return cached;
+    }
+    
+    try {
+      // Use Supabase RPC function instead of direct API call
+      const response = await ltaApi.getBusArrivals(busStopCode);
+      
+      const services = response.Services || [];
+      console.log(`[getBusArrivals] Fetched ${services.length} services from API`);
+      
+      // Cache arrivals with SHORT TTL
+      await saveToCache(cacheKey, services);
+      
+      return services;
+    } catch (error) {
+      console.error(`[getBusArrivals] Error fetching bus arrivals for stop ${busStopCode}:`, error);
+      throw error;
+    }
+  });
 };
 
-// Function to fetch all bus routes
+// Function to fetch all bus routes with caching
 const fetchAllBusRoutes = async (): Promise<BusRoute[]> => {
-  console.log('[fetchAllBusRoutes] Fetching all bus routes from API');
-  
-  try {
-    // Fetch from API
-    console.log('[fetchAllBusRoutes] Calling API to get bus routes');
-    const response = await ltaApi.getBusRoutes(0);
+  return deduplicateRequest<BusRoute[]>('fetchAllBusRoutes', async () => {
+    console.log('[fetchAllBusRoutes] Checking cache for all bus routes');
     
-    if (response && response.value && Array.isArray(response.value)) {
-      console.log(`[fetchAllBusRoutes] Received ${response.value.length} bus routes from API`);
-      return response.value;
-    } else {
-      console.log('[fetchAllBusRoutes] Invalid response structure:', response);
+    // Try to get from cache first with LONG TTL (24 hours)
+    const cached = await getFromCache<BusRoute[]>(CACHE_KEYS.BUS_ROUTES, CACHE_TTL.LONG);
+    if (cached) {
+      console.log(`[fetchAllBusRoutes] Using cached data with ${cached.length} bus routes`);
+      return cached;
+    }
+    
+    console.log('[fetchAllBusRoutes] Cache miss, fetching all bus routes from API');
+    
+    try {
+      // Fetch from API
+      const response = await ltaApi.getBusRoutes(0);
+      
+      if (response && response.value && Array.isArray(response.value)) {
+        const routes = response.value;
+        console.log(`[fetchAllBusRoutes] Received ${routes.length} bus routes from API`);
+        
+        // Save to cache
+        await saveToCache(CACHE_KEYS.BUS_ROUTES, routes);
+        
+        return routes;
+      } else {
+        console.log('[fetchAllBusRoutes] Invalid response structure:', response);
+        return [];
+      }
+    } catch (error) {
+      console.error('[fetchAllBusRoutes] Error fetching all bus routes:', error);
       return [];
     }
-  } catch (error) {
-    console.error('[fetchAllBusRoutes] Error fetching all bus routes:', error);
-    return [];
-  }
+  });
 };
 
 export const getBusRoutes = async (serviceNo: string): Promise<BusRoute[]> => {
-  console.log(`[getBusRoutes] Fetching routes for bus service: ${serviceNo}`);
-  
-  if (!serviceNo) {
-    console.log('[getBusRoutes] No service number provided, returning empty array');
-    return [];
-  }
-  
-  try {
-    // Get all routes from API
-    const allRoutes = await fetchAllBusRoutes();
-    console.log(`[getBusRoutes] Got ${allRoutes.length} total routes, filtering for service ${serviceNo}`);
+  return deduplicateRequest<BusRoute[]>(`getBusRoutes_${serviceNo}`, async () => {
+    console.log(`[getBusRoutes] Fetching routes for bus service: ${serviceNo}`);
     
-    // Log first few routes to debug format issues
-    if (allRoutes.length > 0) {
-      console.log('[getBusRoutes] Sample routes:', allRoutes.slice(0, 3));
+    if (!serviceNo) {
+      console.log('[getBusRoutes] No service number provided, returning empty array');
+      return [];
     }
     
-    // Try multiple matching strategies
-    // 1. Exact match (most strict)
-    let filteredRoutes = allRoutes.filter(route => route.ServiceNo === serviceNo);
-    console.log(`[getBusRoutes] Exact match routes for service ${serviceNo}: ${filteredRoutes.length}`);
+    // Check service-specific cache first with LONG TTL (24 hours)
+    const serviceSpecificCacheKey = `${CACHE_KEYS.BUS_ROUTES_BY_SERVICE}${serviceNo}`;
+    const cachedRoutes = await getFromCache<BusRoute[]>(serviceSpecificCacheKey, CACHE_TTL.LONG);
     
-    // 2. Try loose equality if no exact matches (handles type coercion)
-    if (filteredRoutes.length === 0) {
-      console.log(`[getBusRoutes] No exact matches, trying loose equality for service ${serviceNo}`);
-      filteredRoutes = allRoutes.filter(route => route.ServiceNo == serviceNo);
-      console.log(`[getBusRoutes] Loose equality routes: ${filteredRoutes.length}`);
+    if (cachedRoutes) {
+      console.log(`[getBusRoutes] Using cached routes for service ${serviceNo}`);
+      return cachedRoutes;
     }
     
-    // 3. Try trimmed comparison if still no matches (handles whitespace issues)
-    if (filteredRoutes.length === 0) {
-      console.log(`[getBusRoutes] No loose matches, trying with trimmed service number`);
-      const trimmedServiceNo = serviceNo.trim();
-      filteredRoutes = allRoutes.filter(route => {
-        const routeServiceNo = route.ServiceNo?.trim() || '';
-        return routeServiceNo === trimmedServiceNo;
-      });
-      console.log(`[getBusRoutes] Trimmed match routes: ${filteredRoutes.length}`);
+    try {
+      // Get all routes from API (this function already has its own caching)
+      const allRoutes = await fetchAllBusRoutes();
+      console.log(`[getBusRoutes] Got ${allRoutes.length} total routes, filtering for service ${serviceNo}`);
+      
+      // Try multiple matching strategies
+      // 1. Exact match (most strict)
+      let filteredRoutes = allRoutes.filter(route => route.ServiceNo === serviceNo);
+      
+      // 2. Try loose equality if no exact matches (handles type coercion)
+      if (filteredRoutes.length === 0) {
+        filteredRoutes = allRoutes.filter(route => route.ServiceNo == serviceNo);
+      }
+      
+      // 3. Try trimmed comparison if still no matches (handles whitespace issues)
+      if (filteredRoutes.length === 0) {
+        const trimmedServiceNo = serviceNo.trim();
+        filteredRoutes = allRoutes.filter(route => {
+          const routeServiceNo = route.ServiceNo?.trim() || '';
+          return routeServiceNo === trimmedServiceNo;
+        });
+      }
+      
+      // 4. Case insensitive comparison as last resort
+      if (filteredRoutes.length === 0) {
+        const lowerServiceNo = serviceNo.toLowerCase().trim();
+        filteredRoutes = allRoutes.filter(route => {
+          const routeServiceNo = route.ServiceNo?.toLowerCase().trim() || '';
+          return routeServiceNo === lowerServiceNo;
+        });
+      }
+      
+      // Log the results
+      if (filteredRoutes.length > 0) {
+        console.log(`[getBusRoutes] Found ${filteredRoutes.length} routes for service ${serviceNo}`);
+        
+        // Cache the filtered routes for this specific service
+        await saveToCache(serviceSpecificCacheKey, filteredRoutes);
+      } else {
+        console.log(`[getBusRoutes] No routes found for service ${serviceNo} after all matching attempts`);
+      }
+      
+      return filteredRoutes;
+    } catch (error) {
+      console.error(`[getBusRoutes] Error fetching routes for bus ${serviceNo}:`, error);
+      throw error;
     }
-    
-    // 4. Case insensitive comparison as last resort
-    if (filteredRoutes.length === 0) {
-      console.log(`[getBusRoutes] No trimmed matches, trying case insensitive comparison`);
-      const lowerServiceNo = serviceNo.toLowerCase().trim();
-      filteredRoutes = allRoutes.filter(route => {
-        const routeServiceNo = route.ServiceNo?.toLowerCase().trim() || '';
-        return routeServiceNo === lowerServiceNo;
-      });
-      console.log(`[getBusRoutes] Case insensitive match routes: ${filteredRoutes.length}`);
-    }
-    
-    // Log the results
-    if (filteredRoutes.length > 0) {
-      console.log(`[getBusRoutes] Found ${filteredRoutes.length} routes for service ${serviceNo}`);
-      console.log('[getBusRoutes] First matched route:', filteredRoutes[0]);
-    } else {
-      console.log(`[getBusRoutes] No routes found for service ${serviceNo} after all matching attempts`);
-    }
-    
-    return filteredRoutes;
-  } catch (error) {
-    console.error(`[getBusRoutes] Error fetching routes for bus ${serviceNo}:`, error);
-    throw error;
-  }
+  });
 };
 
 // Train Services
 export const getTrainStations = async (): Promise<AppTrainStation[]> => {
-  // Try to get from cache first
-  const cached = await getFromCache<AppTrainStation[]>(CACHE_KEYS.TRAIN_STATIONS);
-  if (cached) return cached;
-  
-  try {
-    // Fetch train stations from LTA API via Supabase
+  return deduplicateRequest<AppTrainStation[]>('getTrainStations', async () => {
+    console.log('[getTrainStations] Checking cache for train stations');
+    // Try to get from cache first with LONG TTL (24 hours)
+    const cached = await getFromCache<AppTrainStation[]>(CACHE_KEYS.TRAIN_STATIONS, CACHE_TTL.LONG);
+    if (cached) {
+      console.log(`[getTrainStations] Using cached data with ${cached.length} train stations`);
+      
+      // Initialize spatial index if not already done
+      if (!trainStationSpatialIndex) {
+        console.log('[getTrainStations] Creating spatial index from cached train stations');
+        trainStationSpatialIndex = createSpatialIndex<AppTrainStation>(cached);
+      }
+      
+      return cached;
+    }
+    
+    console.log('[getTrainStations] Cache miss, fetching from API');
+    try {
+      // Fetch train stations from LTA API via Supabase
     const response = await ltaApi.getTrainStations();
     const trainStations = response.value || [];
     
@@ -325,6 +320,10 @@ export const getTrainStations = async (): Promise<AppTrainStation[]> => {
     
     // Save to cache
     await saveToCache(CACHE_KEYS.TRAIN_STATIONS, appTrainStations);
+    
+    // Create spatial index for fast geospatial queries
+    trainStationSpatialIndex = createSpatialIndex<AppTrainStation>(appTrainStations);
+    console.log('[getTrainStations] Created spatial index for train stations');
     
     return appTrainStations;
   } catch (error) {
@@ -388,57 +387,92 @@ export const getTrainStations = async (): Promise<AppTrainStation[]> => {
     
     return appTrainStations;
   }
+  });
 };
 
 export const getTrainArrivals = async (stationCode: string): Promise<any> => {
-  try {
+  return deduplicateRequest<any>(`getTrainArrivals_${stationCode}`, async () => {
     console.log(`[getTrainArrivals] Fetching arrivals for station: ${stationCode}`);
     
-    // Fetch train arrivals from LTA API via Supabase
-    const response = await ltaApi.getTrainArrivals(stationCode);
+    // Check cache with SHORT TTL (5 minutes) for arrivals
+    const cacheKey = `${CACHE_KEYS.TRAIN_ARRIVALS}${stationCode}`;
+    const cached = await getFromCache<any>(cacheKey, CACHE_TTL.SHORT);
     
-    if (response) {
-      console.log('[getTrainArrivals] Received train arrivals data from API');
-      return response;
+    if (cached) {
+      console.log(`[getTrainArrivals] Using cached arrivals for station ${stationCode}`);
+      return cached;
     }
     
-    // Return empty data if no arrivals are available
-    console.log('[getTrainArrivals] No arrivals data from API');
-    return { Services: [] };
-  } catch (error) {
-    console.error(`[getTrainArrivals] Error fetching train arrivals for station ${stationCode}:`, error);
-    // Return empty data in case of error
-    return { Services: [] };
-  }
+    try {
+      // Fetch train arrivals from LTA API via Supabase
+      const response = await ltaApi.getTrainArrivals(stationCode);
+      
+      if (response) {
+        console.log('[getTrainArrivals] Received train arrivals data from API');
+        // Cache arrivals with SHORT TTL
+        await saveToCache(cacheKey, response);
+        return response;
+      }
+      
+      // Return empty data if no arrivals are available
+      console.log('[getTrainArrivals] No arrivals data from API');
+      return { Services: [] };
+    } catch (error) {
+      console.error(`[getTrainArrivals] Error fetching train arrivals for station ${stationCode}:`, error);
+      // Return empty data in case of error
+      return { Services: [] };
+    }
+  });
 };
 
 export const getTrainServiceAlerts = async (): Promise<TrainServiceAlert | null> => {
-  try {
-    // Fetch train service alerts from LTA API via Supabase
-    const response = await ltaApi.getTrainServiceAlerts();
+  return deduplicateRequest<TrainServiceAlert | null>('getTrainServiceAlerts', async () => {
+    console.log('[getTrainServiceAlerts] Checking for cached service alerts');
     
-    if (response && response.value && response.value.length > 0) {
-      console.log('[getTrainServiceAlerts] Received service alerts from API');
-      return response.value[0];
+    // Use a medium TTL for service alerts (1 hour)
+    const cached = await getFromCache<TrainServiceAlert | null>('lta_train_service_alerts', CACHE_TTL.MEDIUM);
+    if (cached) {
+      console.log('[getTrainServiceAlerts] Using cached service alerts');
+      return cached;
     }
     
-    // Fallback to default response if no data is returned
-    console.log('[getTrainServiceAlerts] No alerts from API, using default response');
-    return {
-      Status: "1", // 1 = Normal service
-      AffectedSegments: [],
-      Message: "Normal service on all lines."
-    };
-  } catch (error) {
-    console.error('Error fetching train service alerts:', error);
-    
-    // Return a default response in case of error
-    return {
-      Status: "1", // 1 = Normal service
-      AffectedSegments: [],
-      Message: "Normal service on all lines."
-    };
-  }
+    try {
+      // Fetch train service alerts from LTA API via Supabase
+      const response = await ltaApi.getTrainServiceAlerts();
+      
+      if (response && response.value && response.value.length > 0) {
+        console.log('[getTrainServiceAlerts] Received service alerts from API');
+        const alerts = response.value[0];
+        
+        // Cache the alerts with MEDIUM TTL
+        await saveToCache('lta_train_service_alerts', alerts);
+        
+        return alerts;
+      }
+      
+      // Fallback to default response if no data is returned
+      console.log('[getTrainServiceAlerts] No alerts from API, using default response');
+      const defaultAlerts = {
+        Status: "1", // 1 = Normal service
+        AffectedSegments: [],
+        Message: "Normal service on all lines."
+      };
+      
+      // Cache the default alerts
+      await saveToCache('lta_train_service_alerts', defaultAlerts);
+      
+      return defaultAlerts;
+    } catch (error) {
+      console.error('Error fetching train service alerts:', error);
+      
+      // Return a default response in case of error
+      return {
+        Status: "1", // 1 = Normal service
+        AffectedSegments: [],
+        Message: "Normal service on all lines."
+      };
+    }
+  });
 };
 
 // Format time string to human-readable form
@@ -467,65 +501,122 @@ export const formatArrivalTime = (arrivalTimeISO: string): string => {
 
 // Get bus stop name by code
 export const getBusStopName = async (busStopCode: string): Promise<string> => {
-  try {
-    const busStops = await getBusStops();
-    const busStop = busStops.find(stop => stop.BusStopCode === busStopCode);
-    return busStop ? busStop.Description : 'Unknown Bus Stop';
-  } catch (error) {
-    console.error(`Error getting bus stop name for ${busStopCode}:`, error);
-    return 'Unknown Bus Stop';
-  }
+  return deduplicateRequest<string>(`getBusStopName_${busStopCode}`, async () => {
+    try {
+      // Check memory cache for bus stop names (very fast lookup)
+      const busStopNameCacheKey = `busStopName_${busStopCode}`;
+      const cachedName = await getFromCache<string>(busStopNameCacheKey, CACHE_TTL.VERY_LONG);
+      
+      if (cachedName) {
+        return cachedName;
+      }
+      
+      // If not in cache, look it up from the full bus stops list
+      const busStops = await getBusStops();
+      const busStop = busStops.find(stop => stop.BusStopCode === busStopCode);
+      const name = busStop ? busStop.Description : 'Unknown Bus Stop';
+      
+      // Cache the name for future lookups
+      await saveToCache(busStopNameCacheKey, name);
+      
+      return name;
+    } catch (error) {
+      console.error(`Error getting bus stop name for ${busStopCode}:`, error);
+      return 'Unknown Bus Stop';
+    }
+  });
 };
 
 // Get nearby bus stops based on coordinates using optimized K-nearest neighbors algorithm
 export const getNearbyBusStops = async (
   latitude: number, 
   longitude: number, 
-  radius: number = 0.5
+  radius: number = 0.5,
+  limit: number = 20
 ): Promise<AppBusStop[]> => {
-  try {
-    const busStops = await getBusStops();
+  return deduplicateRequest<AppBusStop[]>(`getNearbyBusStops_${latitude.toFixed(4)}_${longitude.toFixed(4)}_${radius}_${limit}`, async () => {
+    console.log(`[getNearbyBusStops] Finding bus stops near (${latitude}, ${longitude})`);
     
-    // Use spatial indexing for large datasets (> 1000 bus stops)
-    if (busStops.length > 1000) {
-      // Create a spatial index for efficient lookup
-      const spatialIndex = createBusStopSpatialIndex(busStops);
-      return spatialIndex.findNearby(latitude, longitude, radius);
-    } else {
-      // For smaller datasets, use the K-nearest neighbors algorithm
-      // Get more stops than needed and then filter by radius
-      const kNearest = findKNearestBusStops(latitude, longitude, busStops, Math.min(50, busStops.length));
-      return kNearest.filter(stop => stop.distance <= radius);
+    try {
+      const busStops = await getBusStops();
+      
+      // Use spatial index if already created (much faster)
+      if (busStopSpatialIndex) {
+        console.log('[getNearbyBusStops] Using spatial index for faster query');
+        const nearbyStops = busStopSpatialIndex.nearest(
+          { x: longitude, y: latitude },
+          limit,
+          radius * 1000 // Convert km to meters
+        );
+        
+        // With our updated spatial index, we now get the stops directly
+        return nearbyStops;
+      }
+      
+      // If no spatial index yet, create one
+      console.log('[getNearbyBusStops] Creating spatial index for bus stops');
+      busStopSpatialIndex = createSpatialIndex(busStops);
+      
+      // Now use the spatial index
+      const nearbyStops = busStopSpatialIndex.nearest(
+        { x: longitude, y: latitude },
+        limit,
+        radius * 1000 // Convert km to meters
+      );
+      
+      // With our updated spatial index, we now get the stops directly
+      return nearbyStops;
+    } catch (error) {
+      console.error('Error getting nearby bus stops:', error);
+      throw error;
     }
-  } catch (error) {
-    console.error('Error getting nearby bus stops:', error);
-    throw error;
-  }
+  });
 };
 
 // Get nearby train stations based on coordinates using optimized K-nearest neighbors algorithm
 export const getNearbyTrainStations = async (
   latitude: number, 
   longitude: number, 
-  radius: number = 1
+  radius: number = 1,
+  limit: number = 10
 ): Promise<AppTrainStation[]> => {
-  try {
-    const trainStations = await getTrainStations();
+  return deduplicateRequest<AppTrainStation[]>(`getNearbyTrainStations_${latitude.toFixed(4)}_${longitude.toFixed(4)}_${radius}_${limit}`, async () => {
+    console.log(`[getNearbyTrainStations] Finding train stations near (${latitude}, ${longitude})`);
     
-    // Use K-nearest neighbors algorithm
-    // Get more stations than needed and then filter by radius
-    const kNearest = findKNearestTrainStations(
-      latitude, 
-      longitude, 
-      trainStations, 
-      Math.min(20, trainStations.length)
-    );
-    
-    return kNearest.filter(station => station.distance <= radius);
-  } catch (error) {
-    console.error('Error getting nearby train stations:', error);
-    throw error;
-  }
+    try {
+      const trainStations = await getTrainStations();
+      
+      // Use spatial index if available for faster queries
+      if (trainStationSpatialIndex) {
+        console.log('[getNearbyTrainStations] Using spatial index for faster query');
+        const nearbyStations = trainStationSpatialIndex.nearest(
+          { x: longitude, y: latitude },
+          limit,
+          radius * 1000 // Convert km to meters
+        );
+        
+        // With our updated spatial index, we now get the stations directly
+        return nearbyStations;
+      }
+      
+      // If no spatial index yet, create one
+      console.log('[getNearbyTrainStations] Creating spatial index for train stations');
+      trainStationSpatialIndex = createSpatialIndex(trainStations);
+      
+      // Now use the spatial index
+      const nearbyStations = trainStationSpatialIndex.nearest(
+        { x: longitude, y: latitude },
+        limit,
+        radius * 1000 // Convert km to meters
+      );
+      
+      // With our updated spatial index, we now get the stations directly
+      return nearbyStations;
+    } catch (error) {
+      console.error('Error getting nearby train stations:', error);
+      throw error;
+    }
+  });
 };
 
 // Use the haversineDistance function from geospatialUtils instead
@@ -601,8 +692,8 @@ export const searchTransport = async (query: string): Promise<SearchResult> => {
 // Search history management
 export const getSearchHistory = async (): Promise<string[]> => {
   try {
-    const history = await retrieveData(CACHE_KEYS.SEARCH_HISTORY);
-    return history ? JSON.parse(history) : [];
+    const history = await getFromCache<string[]>(CACHE_KEYS.SEARCH_HISTORY, CACHE_TTL.VERY_LONG);
+    return history || [];
   } catch (error) {
     console.error('Error getting search history:', error);
     return [];
@@ -625,7 +716,7 @@ export const addToSearchHistory = async (query: string): Promise<void> => {
     // Keep only the most recent 10 searches
     const limitedHistory = updatedHistory.slice(0, 10);
     
-    await storeData(CACHE_KEYS.SEARCH_HISTORY, JSON.stringify(limitedHistory));
+    await saveToCache(CACHE_KEYS.SEARCH_HISTORY, limitedHistory);
   } catch (error) {
     console.error('Error adding to search history:', error);
   }
@@ -633,7 +724,7 @@ export const addToSearchHistory = async (query: string): Promise<void> => {
 
 export const clearSearchHistory = async (): Promise<void> => {
   try {
-    await storeData(CACHE_KEYS.SEARCH_HISTORY, JSON.stringify([]));
+    await saveToCache(CACHE_KEYS.SEARCH_HISTORY, []);
   } catch (error) {
     console.error('Error clearing search history:', error);
   }
@@ -642,8 +733,8 @@ export const clearSearchHistory = async (): Promise<void> => {
 // Favorites Management
 export const getFavoriteRoutes = async (): Promise<string[]> => {
   try {
-    const favorites = await retrieveData(CACHE_KEYS.FAVORITES);
-    return favorites ? JSON.parse(favorites) : [];
+    const favorites = await getFromCache<string[]>(CACHE_KEYS.FAVORITES, CACHE_TTL.VERY_LONG);
+    return favorites || [];
   } catch (error) {
     console.error('Error getting favorite routes:', error);
     return [];
@@ -655,7 +746,7 @@ export const addFavoriteRoute = async (routeId: string): Promise<void> => {
     const favorites = await getFavoriteRoutes();
     if (!favorites.includes(routeId)) {
       favorites.push(routeId);
-      await storeData(CACHE_KEYS.FAVORITES, JSON.stringify(favorites));
+      await saveToCache(CACHE_KEYS.FAVORITES, favorites);
     }
   } catch (error) {
     console.error('Error adding favorite route:', error);
@@ -667,7 +758,7 @@ export const removeFavoriteRoute = async (routeId: string): Promise<void> => {
   try {
     const favorites = await getFavoriteRoutes();
     const updatedFavorites = favorites.filter(id => id !== routeId);
-    await storeData(CACHE_KEYS.FAVORITES, JSON.stringify(updatedFavorites));
+    await saveToCache(CACHE_KEYS.FAVORITES, updatedFavorites);
   } catch (error) {
     console.error('Error removing favorite route:', error);
     throw error;
@@ -679,7 +770,20 @@ export const getNearbyTransportServices = async (
   latitude: number,
   longitude: number
 ): Promise<AppTransportService[]> => {
-  try {
+  return deduplicateRequest<AppTransportService[]>(`getNearbyTransportServices_${latitude.toFixed(4)}_${longitude.toFixed(4)}`, async () => {
+    console.log(`[getNearbyTransportServices] Finding transport services near (${latitude}, ${longitude})`);
+    
+    // Check cache with SHORT TTL (2 minutes) for nearby services
+    // This helps reduce API calls while still providing relatively fresh data
+    const cacheKey = `${CACHE_KEYS.NEARBY_SERVICES}_${latitude.toFixed(4)}_${longitude.toFixed(4)}`;
+    const cached = await getFromCache<AppTransportService[]>(cacheKey, CACHE_TTL.SHORT);
+    
+    if (cached) {
+      console.log(`[getNearbyTransportServices] Using cached nearby services (${cached.length} services)`);
+      return cached;
+    }
+    
+    try {
     // Get nearby bus stops (already sorted by distance using optimized algorithms)
     const busStops = await getNearbyBusStops(latitude, longitude);
     
@@ -756,8 +860,8 @@ export const getNearbyTransportServices = async (
       busServices.push(...services);
     });
     
-    // Get nearby train stations (already sorted by distance using optimized algorithms)
-    const trainStations = await getNearbyTrainStations(latitude, longitude);
+    // Get nearby train stations using spatial index for faster queries
+    const trainStations = await getNearbyTrainStations(latitude, longitude, 1, 5);
     
     // Calculate bearing from user to each train station for directional context
     const trainStationBearings = new Map<string, number>();
@@ -840,9 +944,16 @@ export const getNearbyTransportServices = async (
       return a.routeNumber.localeCompare(b.routeNumber);
     });
     
-    return sortedServices;
+    const result = sortedServices;
+      
+    // Cache the results with a SHORT TTL (2 minutes)
+    await saveToCache(cacheKey, result);
+    console.log(`[getNearbyTransportServices] Cached ${result.length} nearby services`);
+      
+    return result;
   } catch (error) {
     console.error('Error getting nearby transport services:', error);
     throw error;
   }
+  });
 };
