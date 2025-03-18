@@ -7,6 +7,7 @@ interface StopCardProps {
   isDestination?: boolean;
   isCurrent?: boolean;
   estimatedTime?: string;
+  disabled?: boolean;
   onPress: () => void;
 }
 
@@ -15,6 +16,7 @@ export default function StopCard({
   isDestination = false,
   isCurrent = false,
   estimatedTime,
+  disabled = false,
   onPress,
 }: StopCardProps) {
   return (
@@ -22,9 +24,11 @@ export default function StopCard({
       style={[
         styles.container, 
         isDestination && styles.destinationContainer,
-        isCurrent && styles.currentContainer
+        isCurrent && styles.currentContainer,
+        disabled && styles.disabledContainer
       ]} 
       onPress={onPress}
+      disabled={disabled}
     >
       <View style={styles.iconContainer}>
         <MapPin 
@@ -76,6 +80,10 @@ const styles = StyleSheet.create({
     shadowRadius: 2,
     elevation: 2,
     alignItems: 'center',
+  },
+  disabledContainer: {
+    opacity: 0.6,
+    backgroundColor: '#F3F4F6',
   },
   destinationContainer: {
     borderWidth: 2,

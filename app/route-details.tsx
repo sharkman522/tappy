@@ -97,19 +97,20 @@ export default function RouteDetailsScreen() {
         const userLocation = await locationService.getCurrentLocation();
         console.log('[RouteDetailsScreen] User location:', userLocation);
         
-        // Use the unified findClosestStop function from geospatialUtils with 1km max distance threshold
+        // Use the unified findClosestStop function from geospatialUtils with 2km max distance threshold
+        // Increased from 1km to 2km to make it more likely to find a nearby stop
         const { closestStop, closestStopIndex, stopsWithDistance: updatedStopsWithDistance } = findClosestStop(
           userLocation.latitude,
           userLocation.longitude,
           stops,
-          1 // 1km max distance threshold
+          2 // 2km max distance threshold
         );
         
         // Store the updated stops with distance information
         setStopsWithDistance(updatedStopsWithDistance);
         
         if (closestStopIndex === -1) {
-          console.log('[RouteDetailsScreen] No stops within 1km of user location');
+          console.log('[RouteDetailsScreen] No stops within 2km of user location');
           setClosestStopIndex(-1);
           setTappyMessage(`Where would you like to go? (No stops nearby)`); 
         } else {
@@ -117,7 +118,8 @@ export default function RouteDetailsScreen() {
                       'Name:', stops[closestStopIndex]?.name, 
                       'Distance:', closestStop?.distance.toFixed(2) + 'km');
           setClosestStopIndex(closestStopIndex);
-          setTappyMessage(`Where would you like to go?`);
+          // Update Tappy's message to highlight the closest stop
+          setTappyMessage(`I found a stop near you: ${stops[closestStopIndex].name} (${(closestStop.distance * 1000).toFixed(0)}m away). Where would you like to go?`);
         }
       } catch (error) {
         console.error('[RouteDetailsScreen] Error finding closest stop:', error);
@@ -170,7 +172,18 @@ export default function RouteDetailsScreen() {
   const isFavorite = favorites.includes(routeId as string);
   
   // Handle stop selection
-  const handleStopSelect = (stopId: string, stopName: string) => {
+  const handleStopSelect = (stopId: string, stopName: string, index: number) => {
+    // Prevent selecting the closest stop as a destination
+    if (closestStopIndex !== -1 && stopId === stops[closestStopIndex].id) {
+      setTappyMessage(`That's where we're starting from! Please select a different destination.`);
+      setTappyAnimating(true);
+      
+      setTimeout(() => {
+        setTappyAnimating(false);
+      }, 1500);
+      return;
+    }
+    
     setSelectedStop(stopId);
     setTappyMessage(`Great choice! We're going to ${stopName}!`);
     setTappyAnimating(true);
@@ -183,19 +196,36 @@ export default function RouteDetailsScreen() {
   // We no longer need this function since we're hiding stops that are behind the user
   // Instead of showing an error message
   
-  // Start journey with selected stop
+  // Start journey with selected stop or closest stop
   const startJourney = async () => {
-    if (!selectedStop) {
+    let stopToUse: string;
+    let stopDetails: any;
+    
+    // Determine which stop to use (selected or closest)
+    if (!selectedStop && closestStopIndex !== -1) {
+      // Use the closest stop if no stop is selected
+      stopToUse = stops[closestStopIndex].id;
+      stopDetails = stops[closestStopIndex];
+      
+      // Update UI to show the selected stop
+      setSelectedStop(stopToUse);
+      setTappyMessage(`Great! We'll start from the closest stop: ${stopDetails.name}`);
+      setTappyAnimating(true);
+      setTimeout(() => setTappyAnimating(false), 1500);
+    } else if (selectedStop) {
+      // Use the manually selected stop
+      stopToUse = selectedStop;
+      stopDetails = stops.find(s => s.id === stopToUse);
+    } else {
+      // No stop selected and no closest stop found
       setTappyMessage("Please select a stop first!");
       setTappyAnimating(true);
       setTimeout(() => setTappyAnimating(false), 1500);
       return;
     }
     
-    // Get selected stop details
-    const selectedStopDetails = stops.find(s => s.id === selectedStop);
-    
-    if (!selectedStopDetails) {
+    // Verify that we have valid stop details
+    if (!stopDetails) {
       setTappyMessage("Oops, can't find that stop!");
       return;
     }
@@ -220,8 +250,8 @@ export default function RouteDetailsScreen() {
       const params: Record<string, string> = { 
         routeId: routeId as string, 
         routeNumber: routeNumber as string, 
-        stopId: selectedStop,
-        stopName: selectedStopDetails.name,
+        stopId: stopToUse,
+        stopName: stopDetails.name,
         userLat: userLocation.latitude.toString(),
         userLng: userLocation.longitude.toString()
       };
@@ -252,8 +282,8 @@ export default function RouteDetailsScreen() {
         params: { 
           routeId: routeId as string, 
           routeNumber: routeNumber as string, 
-          stopId: selectedStop,
-          stopName: selectedStopDetails.name
+          stopId: stopToUse,
+          stopName: stopDetails.name
         }
       });
     }
@@ -416,11 +446,14 @@ export default function RouteDetailsScreen() {
                   return (
                     <StopCard
                       key={`${stop.id}-${stop.stopSequence || index}`}
-                      stopName={stop.name}
+                      stopName={isCurrentStop ? `${stop.name} (Closest to you)` : stop.name}
                       estimatedTime={`${displayTime}${distanceText}`}
                       isDestination={stop.id === selectedStop}
                       isCurrent={isCurrentStop}
-                      onPress={() => handleStopSelect(stop.id, stop.name)}
+                      // Pass the index in the filtered array to handleStopSelect
+                      onPress={() => handleStopSelect(stop.id, stop.name, index)}
+                      // Disable the stop if it's the closest stop
+                      disabled={isCurrentStop}
                     />
                   );
                 })
@@ -569,11 +602,11 @@ export default function RouteDetailsScreen() {
         )}
       </ScrollView>
       
-      {/* Ride with Tappy Button - only show for bus routes with selected stop */}
-      {contentType === 'bus' && selectedStop && (
+      {/* Ride with Tappy Button - show for bus routes with closest stop */}
+      {contentType === 'bus' && (closestStopIndex !== -1 || selectedStop) && (
         <View style={styles.bottomContainer}>
           <TappyButton
-            title="Start Journey with Tappy!"
+            title={selectedStop ? "Start Journey with Tappy!" : "Select a Destination"}
             onPress={startJourney}
             type="primary"
             size="large"
