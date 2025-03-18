@@ -208,17 +208,41 @@ export default function RouteDetailsScreen() {
       const userLocation = await locationService.getCurrentLocation();
       console.log('[RouteDetailsScreen] User location for journey:', userLocation);
       
-      // Navigate to journey screen with user's location
+      // Find the closest stop to use as the starting point
+      const { closestStop, closestStopIndex } = findClosestStop(
+        userLocation.latitude,
+        userLocation.longitude,
+        stops,
+        5 // 5km threshold
+      );
+      
+      // Prepare params with closest stop information
+      const params: Record<string, string> = { 
+        routeId: routeId as string, 
+        routeNumber: routeNumber as string, 
+        stopId: selectedStop,
+        stopName: selectedStopDetails.name,
+        userLat: userLocation.latitude.toString(),
+        userLng: userLocation.longitude.toString()
+      };
+      
+      // Add closest stop information if found
+      if (closestStopIndex !== -1 && closestStop) {
+        params.closestStopId = stops[closestStopIndex].id;
+        params.closestStopIndex = closestStopIndex.toString();
+        params.closestStopDistance = closestStop.distance.toString();
+        console.log('[RouteDetailsScreen] Found closest stop:', 
+                    'Index:', closestStopIndex, 
+                    'Name:', stops[closestStopIndex]?.name,
+                    'Distance:', closestStop.distance.toFixed(2) + 'km');
+      } else {
+        console.log('[RouteDetailsScreen] No close stops found within threshold');
+      }
+      
+      // Navigate to journey screen with all parameters
       router.push({
         pathname: '/journey-tracking',
-        params: { 
-          routeId: routeId as string, 
-          routeNumber: routeNumber as string, 
-          stopId: selectedStop,
-          stopName: selectedStopDetails.name,
-          userLat: userLocation.latitude.toString(),
-          userLng: userLocation.longitude.toString()
-        }
+        params: params
       });
     } catch (error) {
       console.error('[RouteDetailsScreen] Error getting location:', error);

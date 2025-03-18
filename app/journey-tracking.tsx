@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Switch, AppState, AppStateStatus } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Switch, AppState, AppStateStatus, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, router } from 'expo-router';
-import { ArrowLeft, MapPin, TriangleAlert as AlertTriangle } from 'lucide-react-native';
+import { ArrowLeft, MapPin, TriangleAlert as AlertTriangle, Clock } from 'lucide-react-native';
 import * as Notifications from 'expo-notifications';
 
 // Components
@@ -16,15 +16,30 @@ import { locationService } from '@/utils/locationService';
 import { useRouteStops } from '@/utils/ltaDataProvider';
 import { notificationService } from '@/utils/notificationService';
 import { findClosestStop, haversineDistance } from '@/utils/geospatialUtils';
+import * as ltaService from '@/services/lta-service';
+import { BusArrival } from '@/types/lta-api';
 
 export default function JourneyTrackingScreen() {
-  const { routeId, routeNumber, stopId, stopName, userLat, userLng } = useLocalSearchParams();
+  const { 
+    routeId, 
+    routeNumber, 
+    stopId, 
+    stopName, 
+    userLat, 
+    userLng, 
+    closestStopId, 
+    closestStopIndex, 
+    closestStopDistance 
+  } = useLocalSearchParams();
   const [currentStopIndex, setCurrentStopIndex] = useState(0);
   const [journeyStatus, setJourneyStatus] = useState('Starting your journey...');
   const [tappyState, setTappyState] = useState<'sleeping' | 'happy' | 'alert'>('sleeping');
   const [isAlarmTriggered, setIsAlarmTriggered] = useState(false);
   const [currentLocation, setCurrentLocation] = useState<{latitude: number, longitude: number} | null>(null);
   const [partialProgress, setPartialProgress] = useState<number>(0);
+  const [busArrivals, setBusArrivals] = useState<BusArrival[]>([]);
+  const [loadingArrivals, setLoadingArrivals] = useState(false);
+  const [showArrivals, setShowArrivals] = useState(false);
   // Test mode completely removed as requested
   const [locationPermission, setLocationPermission] = useState(true);
   const [gpsError, setGpsError] = useState(false);
@@ -34,23 +49,107 @@ export default function JourneyTrackingScreen() {
   const responseListener = useRef<Notifications.Subscription>();
 
   // Get stops for this route from the LTA API
-  const { stops, loading, error } = useRouteStops(
+  const { stops: originalStops, loading, error } = useRouteStops(
     routeNumber as string,
     1, // Default direction
     stopId as string // Pass the stopId to auto-select the direction
   );
   
-  // Find destination stop index (the stop the user wants to go to)
-  const destinationIndex = stops.findIndex(stop => stop.id === stopId);
+  // State to hold the sliced stops (from closest stop to the end)
+  const [stops, setStops] = useState<any[]>([]);
   
-  // Find the starting stop index (the stop passed from the previous screen)
-  // We'll use the first stop in the route by default if no specific starting stop is provided
-  const [startingStopIndex, setStartingStopIndex] = useState(0); // Default to first stop in the route
+  // Find destination stop index (the stop the user wants to go to) in the sliced array
+  // This will always be the last stop in our sliced array if we have a valid destination
+  const destinationIndex = stops && stops.length > 0 ? stops.length - 1 : -1;
+  
+  // The closest stop will become index 0 in our journey
+  // We'll store the original index for reference
+  const [originalClosestStopIndex, setOriginalClosestStopIndex] = useState(
+    closestStopIndex ? parseInt(closestStopIndex as string, 10) : -1
+  );
+  
+  // We'll always start at index 0 since we're slicing the stops array
+  const [startingStopIndex, setStartingStopIndex] = useState(0);
   
   // Use the unified haversineDistance function from geospatialUtils
   // This ensures consistent distance calculations across the entire application
   // Note: haversineDistance returns distance in kilometers, so we multiply by 1000 for meters when needed
 
+  // Function to fetch bus arrivals for the current stop
+  const fetchBusArrivals = async (busStopCode: string) => {
+    try {
+      setLoadingArrivals(true);
+      console.log(`[JourneyTracking] Fetching bus arrivals for stop ${busStopCode}`);
+      
+      // Make sure busStopCode is valid before making the API call
+      if (!busStopCode) {
+        console.warn('[JourneyTracking] Invalid bus stop code, skipping arrivals fetch');
+        setLoadingArrivals(false);
+        return;
+      }
+      
+      const arrivals = await ltaService.getBusArrivals(busStopCode);
+      
+      // Filter arrivals to only show the current route
+      if (arrivals && Array.isArray(arrivals)) {
+        const filteredArrivals = arrivals.filter(arrival => arrival.ServiceNo === routeNumber);
+        console.log(`[JourneyTracking] Filtered ${filteredArrivals.length} arrivals for route ${routeNumber}`);
+        setBusArrivals(filteredArrivals);
+      } else {
+        console.warn('[JourneyTracking] No arrivals data returned');
+        setBusArrivals([]);
+      }
+      
+      setLoadingArrivals(false);
+    } catch (error) {
+      console.error('[JourneyTracking] Error fetching bus arrivals:', error);
+      setLoadingArrivals(false);
+      setBusArrivals([]);
+    }
+  };
+
+  // Process the stops array when originalStops changes
+  useEffect(() => {
+    if (!originalStops || originalStops.length === 0) return;
+    
+    // Find the closest stop index from the passed parameter or use 0 as default
+    const closestIdx = closestStopIndex ? parseInt(closestStopIndex as string, 10) : 0;
+    
+    // Validate the index
+    if (closestIdx >= 0 && closestIdx < originalStops.length) {
+      // Store the original index for reference
+      setOriginalClosestStopIndex(closestIdx);
+      
+      // Find the destination index in the original stops array
+      const originalDestinationIndex = originalStops.findIndex(stop => stop.id === stopId);
+      
+      // Slice the stops array to start from the closest stop and end at the destination
+      let slicedStops;
+      if (originalDestinationIndex !== -1 && originalDestinationIndex >= closestIdx) {
+        // If destination is valid and after the closest stop, slice from closest to destination (inclusive)
+        slicedStops = originalStops.slice(closestIdx, originalDestinationIndex + 1);
+        console.log(`[JourneyTracking] Sliced stops array from index ${closestIdx} to destination index ${originalDestinationIndex}, new length: ${slicedStops.length}`);
+      } else if (originalDestinationIndex !== -1 && originalDestinationIndex < closestIdx) {
+        // If destination is before the closest stop, we've already passed it - use only the closest stop
+        slicedStops = [originalStops[closestIdx]];
+        console.log(`[JourneyTracking] Destination already passed, using only closest stop at index ${closestIdx}`);
+      } else {
+        // If no valid destination, slice from closest stop to the end
+        slicedStops = originalStops.slice(closestIdx);
+        console.log(`[JourneyTracking] No valid destination, sliced stops array from index ${closestIdx}, new length: ${slicedStops.length}`);
+      }
+      
+      setStops(slicedStops);
+      
+      // Reset current stop index to 0 since we've sliced the array
+      setCurrentStopIndex(0);
+    } else {
+      // If invalid index, use the full array
+      setStops(originalStops);
+      console.log('[JourneyTracking] Using full stops array, length:', originalStops.length);
+    }
+  }, [originalStops, closestStopIndex]);
+  
   // Initialize location service and set up journey tracking
   useEffect(() => {
     // Function to get the user's current location for tracking purposes
@@ -74,21 +173,22 @@ export default function JourneyTrackingScreen() {
         // Set the current location for tracking purposes
         setCurrentLocation(userLocation);
         
-        // Log the starting stop information
-        if (stops.length > 0) {
-          // If we have a valid destination index, use it
-          if (destinationIndex !== -1) {
-            console.log('[JourneyTracking] Destination stop:', 
-                        'Index:', destinationIndex, 
-                        'Name:', stops[destinationIndex]?.name);
-          }
-          
-          // Set the current stop index to the starting stop index
-          // This ensures we start from the correct stop in the route
-          setCurrentStopIndex(startingStopIndex);
-          console.log('[JourneyTracking] Starting journey from stop:', 
-                      'Index:', startingStopIndex, 
-                      'Name:', stops[startingStopIndex]?.name);
+        // Since we've already sliced the stops array, we're always starting at index 0
+        setCurrentStopIndex(0);
+        console.log('[JourneyTracking] Starting journey from index 0 (closest stop):', stops[0]?.name);
+        
+        // If we have a valid destination, log it
+        if (destinationIndex !== -1 && stops.length > 0) {
+          console.log('[JourneyTracking] Destination stop:', 
+                    'Index:', destinationIndex, 
+                    'Name:', stops[destinationIndex]?.name, 
+                    'ID:', stops[destinationIndex]?.id);
+        }
+        
+        // Since we're at the first stop in the route (after slicing), fetch bus arrivals
+        if (stops.length > 0 && stops[0] && stops[0].id) {
+          fetchBusArrivals(stops[0].id);
+          setShowArrivals(true);
         }
       } catch (error) {
         console.error('[JourneyTracking] Error initializing location tracking:', error);
@@ -96,6 +196,7 @@ export default function JourneyTrackingScreen() {
       }
     };
     
+
     // Initialize location service and notifications
   
     const initServices = async () => {
@@ -120,7 +221,7 @@ export default function JourneyTrackingScreen() {
     initServices();
     
     // Initialize location tracking once services are ready and stops are loaded
-    if (stops.length > 0) {
+    if (stops && stops.length > 0) {
       initializeLocationTracking();
     }
     
@@ -216,34 +317,52 @@ export default function JourneyTrackingScreen() {
         // Find closest stop
         const closestStopIndex = foundIndex !== -1 ? foundIndex : currentStopIndex;
         
-        // Only update current stop index if we've already determined the starting point
-        if (startingStopIndex !== -1) {
-          // Don't go backward in the route - only move forward
-          if (closestStopIndex > currentStopIndex) {
-            setCurrentStopIndex(closestStopIndex);
-          }
+        // We're always starting at index 0 since we sliced the array
+        // Don't go backward in the route - only move forward
+        if (closestStopIndex > currentStopIndex) {
+          setCurrentStopIndex(closestStopIndex);
         }
         
         // Calculate distance to next stop (in meters)
         const nextStopIndex = Math.min(closestStopIndex + 1, stops.length - 1);
-        // Use haversineDistance for consistent calculations (returns km, so multiply by 1000 for meters)
-        const distanceToNextStop = haversineDistance(
-          location.latitude,
-          location.longitude,
-          stops[nextStopIndex].coordinates.latitude,
-          stops[nextStopIndex].coordinates.longitude
-        ) * 1000;
+        
+        // Make sure the next stop exists and has coordinates before calculating distance
+        let distanceToNextStop = 0;
+        if (nextStopIndex < stops.length && stops[nextStopIndex] && 
+            stops[nextStopIndex].coordinates && 
+            stops[nextStopIndex].coordinates.latitude !== undefined && 
+            stops[nextStopIndex].coordinates.longitude !== undefined) {
+          // Use haversineDistance for consistent calculations (returns km, so multiply by 1000 for meters)
+          distanceToNextStop = haversineDistance(
+            location.latitude,
+            location.longitude,
+            stops[nextStopIndex].coordinates.latitude,
+            stops[nextStopIndex].coordinates.longitude
+          ) * 1000;
+        }
         
         // Calculate distance to destination stop (in meters)
-        const distanceToDestination = haversineDistance(
-          location.latitude,
-          location.longitude,
-          stops[destinationIndex].coordinates.latitude,
-          stops[destinationIndex].coordinates.longitude
-        ) * 1000;
+        let distanceToDestination = 0;
+        if (destinationIndex >= 0 && destinationIndex < stops.length && 
+            stops[destinationIndex] && stops[destinationIndex].coordinates && 
+            stops[destinationIndex].coordinates.latitude !== undefined && 
+            stops[destinationIndex].coordinates.longitude !== undefined) {
+          distanceToDestination = haversineDistance(
+            location.latitude,
+            location.longitude,
+            stops[destinationIndex].coordinates.latitude,
+            stops[destinationIndex].coordinates.longitude
+          ) * 1000;
+        }
         
         // Calculate partial progress between current stop and next stop
-        if (closestStopIndex < stops.length - 1) {
+        if (closestStopIndex < stops.length - 1 && 
+            closestStopIndex >= 0 && nextStopIndex >= 0 && 
+            closestStopIndex < stops.length && nextStopIndex < stops.length && 
+            stops[closestStopIndex] && stops[nextStopIndex] && 
+            stops[closestStopIndex].coordinates && stops[nextStopIndex].coordinates &&
+            stops[closestStopIndex].coordinates.latitude && stops[closestStopIndex].coordinates.longitude &&
+            stops[nextStopIndex].coordinates.latitude && stops[nextStopIndex].coordinates.longitude) {
           // Calculate the total distance between the current stop and the next stop
           const distanceBetweenStops = haversineDistance(
             stops[closestStopIndex].coordinates.latitude,
@@ -260,6 +379,20 @@ export default function JourneyTrackingScreen() {
           // This represents how far along the segment the user has traveled
           // The total potential green is the full length between stops
           const progress = Math.max(0, Math.min(100, (distanceTraveled / distanceBetweenStops) * 100));
+          
+          // If we're at the first stop, show arrivals
+          if (closestStopIndex === 0) {
+            if (!showArrivals) {
+              setShowArrivals(true);
+              // Fetch bus arrivals for the first stop
+              if (stops[closestStopIndex] && stops[closestStopIndex].id) {
+                const busStopCode = stops[closestStopIndex].id;
+                fetchBusArrivals(busStopCode);
+              }
+            }
+          } else {
+            setShowArrivals(false);
+          }
           
           console.log(
             `[JourneyTracking] Progress calculation:\n` +
@@ -342,26 +475,33 @@ export default function JourneyTrackingScreen() {
   
   // Update journey status based on current position
   useEffect(() => {
-    if (stops.length === 0) return;
+    if (stops.length === 0 || destinationIndex === -1) return;
     
-    if (currentStopIndex === destinationIndex - 2) {
-      setTappyState('alert');
-      setJourneyStatus(`Two stops away from: ${stops[destinationIndex].name}! Get ready to alight!`);
-    } else if (currentStopIndex === destinationIndex) {
-      if (!isAlarmTriggered) {
-        setIsAlarmTriggered(true);
+    // Make sure the destination index is valid
+    if (destinationIndex >= 0 && destinationIndex < stops.length) {
+      if (currentStopIndex === destinationIndex - 2) {
+        setTappyState('alert');
+        setJourneyStatus(`Two stops away from: ${stops[destinationIndex].name}! Get ready to alight!`);
+      } else if (currentStopIndex === destinationIndex) {
+        if (!isAlarmTriggered) {
+          setIsAlarmTriggered(true);
+        }
+      } else {
+        // Ensure Tappy stays sleeping during the journey
+        setTappyState('sleeping');
+        
+        // Calculate stops remaining - only count the stops that are actually visible to the user
+        const stopsRemaining = destinationIndex - currentStopIndex;
+        
+        // Use singular or plural form based on the number of stops
+        const stopText = stopsRemaining === 1 ? "1 stop away" : `${stopsRemaining} stops away`;
+        
+        // Make sure the next stop index is valid
+        const nextStopIndex = currentStopIndex + 1;
+        const nextStopName = nextStopIndex < stops.length ? stops[nextStopIndex]?.name : 'next stop';
+        
+        setJourneyStatus(`Now approaching: ${nextStopName} (${stopText})`);
       }
-    } else {
-      // Ensure Tappy stays sleeping during the journey
-      setTappyState('sleeping');
-      
-      // Calculate stops remaining - only count the stops that are actually visible to the user
-      const stopsRemaining = destinationIndex - currentStopIndex;
-      
-      // Use singular or plural form based on the number of stops
-      const stopText = stopsRemaining === 1 ? "1 stop away" : `${stopsRemaining} stops away`;
-      
-      setJourneyStatus(`Now approaching: ${stops[currentStopIndex+1]?.name || 'next stop'} (${stopText})`);
     }
   }, [currentStopIndex, isAlarmTriggered, stops, destinationIndex]);
   
@@ -426,7 +566,7 @@ export default function JourneyTrackingScreen() {
           <Text style={styles.statusText}>{journeyStatus}</Text>
           <View style={styles.progressContainer}>
             <Text style={styles.progressText}>
-              {currentStopIndex >= startingStopIndex ? 1 + (currentStopIndex - startingStopIndex) : 1} of {destinationIndex - startingStopIndex + 1} stops
+              {currentStopIndex + 1} of {stops.length} stops
             </Text>
             <Text style={styles.destinationText}>
               Destination: {stopName} <MapPin size={14} color="#FF8A65" />
@@ -445,6 +585,48 @@ export default function JourneyTrackingScreen() {
             partialProgress={partialProgress}
             currentLocation={currentLocation || undefined}
           />
+          
+          {/* Bus Arrivals Panel - Only shown when at the first stop */}
+          {showArrivals && currentStopIndex === 0 && (
+            <View style={styles.arrivalsPanel}>
+              <View style={styles.arrivalsPanelHeader}>
+                <Clock size={18} color="#4B5563" />
+                <Text style={styles.arrivalsPanelTitle}>Bus Arrivals</Text>
+              </View>
+              
+              {loadingArrivals ? (
+                <ActivityIndicator size="small" color="#4F46E5" />
+              ) : busArrivals.length > 0 ? (
+                <View style={styles.arrivalsList}>
+                  {busArrivals.map((arrival, index) => (
+                    <View key={index} style={styles.arrivalItem}>
+                      <Text style={styles.busNumber}>{arrival.ServiceNo}</Text>
+                      <View style={styles.arrivalTimes}>
+                        {arrival.NextBus && (
+                          <View style={styles.nextBusContainer}>
+                            <Text style={styles.nextBusLabel}>Next:</Text>
+                            <Text style={styles.nextBusTime}>
+                              {ltaService.formatArrivalTime(arrival.NextBus.EstimatedArrival)}
+                            </Text>
+                          </View>
+                        )}
+                        {arrival.NextBus2 && (
+                          <View style={styles.nextBusContainer}>
+                            <Text style={styles.nextBusLabel}>Then:</Text>
+                            <Text style={styles.nextBusTime}>
+                              {ltaService.formatArrivalTime(arrival.NextBus2.EstimatedArrival)}
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <Text style={styles.noArrivalsText}>No arrivals information available</Text>
+              )}
+            </View>
+          )}
         </View>
         
         {/* Tappy Character */}
@@ -597,5 +779,75 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
+  },
+  arrivalsPanel: {
+    position: 'absolute',
+    bottom: 16,
+    left: 16,
+    right: 16,
+    backgroundColor: 'white',
+    borderRadius: 12,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  arrivalsPanelHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  arrivalsPanelTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginLeft: 8,
+  },
+  arrivalsList: {
+    gap: 12,
+  },
+  arrivalItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  busNumber: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#4F46E5',
+    backgroundColor: '#EEF2FF',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    overflow: 'hidden',
+    minWidth: 60,
+    textAlign: 'center',
+  },
+  arrivalTimes: {
+    flexDirection: 'row',
+    gap: 16,
+  },
+  nextBusContainer: {
+    flexDirection: 'column',
+    alignItems: 'center',
+  },
+  nextBusLabel: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginBottom: 2,
+  },
+  nextBusTime: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#1F2937',
+  },
+  noArrivalsText: {
+    fontSize: 14,
+    color: '#6B7280',
+    fontStyle: 'italic',
+    textAlign: 'center',
+    marginTop: 8,
   },
 });

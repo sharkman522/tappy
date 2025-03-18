@@ -31,8 +31,8 @@ export default function MapWeb(props: MapWebProps) {
   // Track the highest progress values to prevent reversal
   const [highestProgress, setHighestProgress] = React.useState(0);
   const [highestVerticalProgress, setHighestVerticalProgress] = React.useState<{[key: string]: number}>({});
-  // Only show stops from the current stop to the destination
-  const visibleStops = stops.slice(currentStopIndex, destinationStopIndex + 1);
+  // Show all stops in the route, not just from current to destination
+  const visibleStops = stops;
   // Create a ref for the ScrollView
   const scrollViewRef = React.useRef<ScrollView>(null);
   // Create refs for each stop item to measure their positions
@@ -43,12 +43,14 @@ export default function MapWeb(props: MapWebProps) {
     stopRefs.current = Array(visibleStops.length).fill(null);
   }, [visibleStops.length]);
   // Determine which stops are passed, current, next, or upcoming
-  // For visible stops, we need to adjust the index since we're starting from currentStopIndex
   const getStopStatus = (index: number) => {
-    // First stop in visible stops is always the current stop
-    if (index === 0) return 'current';
+    // Check if this stop is before the current stop (passed)
+    if (index < currentStopIndex) return 'passed';
+    // Check if this is the current stop
+    if (index === currentStopIndex) return 'current';
     // Check if this is the destination stop
-    if (currentStopIndex + index === destinationStopIndex) return 'destination';
+    if (index === destinationStopIndex) return 'destination';
+    // Otherwise it's an upcoming stop
     return 'upcoming';
   };
 
@@ -69,7 +71,7 @@ export default function MapWeb(props: MapWebProps) {
   let currentProgress = 0;
   if (totalStopsInJourney > 0) {
     // Calculate base progress based on completed stops
-    const completedStops = currentStopIndex - stops.indexOf(visibleStops[0]);
+    const completedStops = currentStopIndex; // Use the actual current stop index
     
     // Add partial progress to next stop based on real location data
     // This creates the dynamic movement between stops
@@ -102,11 +104,11 @@ export default function MapWeb(props: MapWebProps) {
     let connectorProgress = 0;
     
     // If we're past this connector, it's 100% filled
-    if (stopIndex < currentStopIndex - stops.indexOf(visibleStops[0])) {
+    if (stopIndex < currentStopIndex) {
       connectorProgress = 100;
     }
     // If we're at the stop just before this connector, show partial progress
-    else if (stopIndex === currentStopIndex - stops.indexOf(visibleStops[0]) + 1) {
+    else if (stopIndex === currentStopIndex + 1) {
       // Use the partial progress from props if available, otherwise calculate it
       if (partialProgress !== undefined) {
         // Use the partialProgress directly - this value now represents the percentage
@@ -142,8 +144,8 @@ export default function MapWeb(props: MapWebProps) {
     if (scrollViewRef.current && visibleStops.length > 0) {
       // Use a timeout to ensure the view has been laid out
       setTimeout(() => {
-        // Get the first stop ref (current stop)
-        const currentStopRef = stopRefs.current[0];
+        // Get the current stop ref based on the currentStopIndex
+        const currentStopRef = stopRefs.current[currentStopIndex];
         
         // If we have a reference to the current stop view, scroll to it
         if (currentStopRef) {
