@@ -26,36 +26,35 @@ export const locationService = {
     }
 
     try {
-      if (Platform.OS === 'web') {
-        return new Promise((resolve, reject) => {
-          // Try to use web Geolocation API
-          if ('geolocation' in navigator) {
-            navigator.geolocation.getCurrentPosition(
-              (position) => {
-                resolve({
-                  latitude: position.coords.latitude,
-                  longitude: position.coords.longitude,
-                });
-              },
-              (error) => {
-                console.error('Error getting browser geolocation:', error);
-                // Fall back to default location
-                resolve({ latitude: 1.3521, longitude: 103.8198 });
-              },
-              { enableHighAccuracy: true }
-            );
-          } else {
-            // No geolocation available, use default
-            resolve({ latitude: 1.3521, longitude: 103.8198 });
-          }
-        });
-      } else {
-        // For non-web platforms, return default Singapore location
-        return { latitude: 1.3521, longitude: 103.8198 };
+      // Use the Expo Location API to get the actual device location
+      // Import the Location API at the top of the file
+      const Location = require('expo-location');
+      
+      // Request permission first
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      
+      if (status !== 'granted') {
+        console.log('Location permission denied, using default location');
+        return { latitude: 1.3521, longitude: 103.8198 }; // Default to Singapore
       }
+      
+      // Get the actual device location
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High
+      });
+      
+      console.log('Got actual device location:', {
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude
+      });
+      
+      return {
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude
+      };
     } catch (error) {
       console.error('Error getting location:', error);
-      // Return a default location (Singapore)
+      // Return a default location (Singapore) as fallback
       return { latitude: 1.3521, longitude: 103.8198 };
     }
   },
@@ -92,35 +91,52 @@ export const locationService = {
       };
     }
 
-    // Real location watching for web
-    if (Platform.OS === 'web' && 'geolocation' in navigator) {
-      const watchId = navigator.geolocation.watchPosition(
+    try {
+      // Use Expo Location API for actual device location tracking
+      const Location = require('expo-location');
+      
+      // Request permission first (if not already granted)
+      Location.requestForegroundPermissionsAsync().then(({ status }) => {
+        if (status !== 'granted') {
+          console.log('Location permission denied for watching, using default');
+          // Use interval with default location as fallback
+          const intervalId = setInterval(() => {
+            callback({ latitude: 1.3521, longitude: 103.8198 });
+          }, 5000);
+          
+          return () => {
+            clearInterval(intervalId);
+            currentLocationSubscribers = currentLocationSubscribers.filter(sub => sub !== callback);
+          };
+        }
+      });
+      
+      // Start watching position with high accuracy
+      const watchId = Location.watchPositionAsync(
+        { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 10 },
         (position) => {
-          callback({
+          const location = {
             latitude: position.coords.latitude,
             longitude: position.coords.longitude,
-          });
-        },
-        (error) => {
-          console.error('Error watching location:', error);
-          // Provide mock location as fallback
-          callback({ latitude: 1.3521, longitude: 103.8198 });
-        },
-        { enableHighAccuracy: true }
+          };
+          console.log('Location update:', location);
+          callback(location);
+        }
       );
-
+      
+      // Return unsubscribe function
       return () => {
-        navigator.geolocation.clearWatch(watchId);
+        watchId.then(subscription => subscription.remove());
         currentLocationSubscribers = currentLocationSubscribers.filter(sub => sub !== callback);
       };
-    } else {
-      // For native platforms without native modules or no geolocation,
-      // just use a simple interval to move through the mock route
+    } catch (error) {
+      console.error('Error setting up location watching:', error);
+      
+      // Fallback to interval with default location
       const intervalId = setInterval(() => {
-        // Just use default location 
         callback({ latitude: 1.3521, longitude: 103.8198 });
       }, 5000);
-
+      
       return () => {
         clearInterval(intervalId);
         currentLocationSubscribers = currentLocationSubscribers.filter(sub => sub !== callback);

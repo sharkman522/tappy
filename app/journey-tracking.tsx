@@ -15,6 +15,7 @@ import LoadingIndicator from '@/components/LoadingIndicator';
 import { locationService } from '@/utils/locationService';
 import { useRouteStops } from '@/utils/ltaDataProvider';
 import { notificationService } from '@/utils/notificationService';
+import { findClosestStop, haversineDistance } from '@/utils/geospatialUtils';
 
 export default function JourneyTrackingScreen() {
   const { routeId, routeNumber, stopId, stopName, userLat, userLng } = useLocalSearchParams();
@@ -63,8 +64,8 @@ export default function JourneyTrackingScreen() {
 
   // Initialize location service and find closest stop to user
   useEffect(() => {
-    // Function to find the closest stop to the user's current location
-    const findClosestStop = async () => {
+    // Function to find the closest stop to the user's current location using the unified approach
+    const findClosestStopAndUpdate = async () => {
       if (stops.length === 0) return;
       
       try {
@@ -81,24 +82,28 @@ export default function JourneyTrackingScreen() {
           console.log('[JourneyTracking] Using current user location:', userLocation);
         }
         
-        // Calculate distances to all stops
-        const distances = stops.map(stop => {
-          return calculateDistance(
-            userLocation.latitude,
-            userLocation.longitude,
-            stop.coordinates.latitude,
-            stop.coordinates.longitude
-          );
-        });
+        // Use the unified findClosestStop function from geospatialUtils with 1km max distance threshold
+        const { closestStopIndex, closestStop } = findClosestStop(
+          userLocation.latitude,
+          userLocation.longitude,
+          stops,
+          1 // 1km max distance threshold
+        );
         
-        // Find the closest stop
-        const closestStopIndex = distances.indexOf(Math.min(...distances));
-        console.log('[JourneyTracking] Closest stop index:', closestStopIndex, 'Name:', stops[closestStopIndex]?.name);
-        
-        // Only set if we haven't already determined it
-        if (startingStopIndex === -1) {
-          setStartingStopIndex(closestStopIndex);
-          setCurrentStopIndex(closestStopIndex);
+        // Only set if we found a valid stop and haven't already determined it
+        if (closestStopIndex !== -1) {
+          console.log('[JourneyTracking] Closest stop index:', closestStopIndex, 
+                      'Name:', stops[closestStopIndex]?.name,
+                      'Distance:', closestStop?.distance.toFixed(2) + 'km');
+          
+          if (startingStopIndex === -1) {
+            setStartingStopIndex(closestStopIndex);
+            setCurrentStopIndex(closestStopIndex);
+          }
+        } else {
+          console.log('[JourneyTracking] No stops within 1km of user location');
+          // Handle case where no stop is close enough
+          // We don't update indices in this case
         }
       } catch (error) {
         console.error('[JourneyTracking] Error finding closest stop:', error);
@@ -130,7 +135,7 @@ export default function JourneyTrackingScreen() {
     
     // Find the closest stop to the user after services are initialized
     if (stops.length > 0 && startingStopIndex === -1) {
-      findClosestStop();
+      findClosestStopAndUpdate();
     }
     
     // Set up notification listeners
@@ -231,29 +236,30 @@ export default function JourneyTrackingScreen() {
         
         // Calculate distance to next stop (in meters)
         const nextStopIndex = Math.min(closestStopIndex + 1, stops.length - 1);
-        const distanceToNextStop = calculateDistance(
+        // Use haversineDistance for consistent calculations (returns km, so multiply by 1000 for meters)
+        const distanceToNextStop = haversineDistance(
           location.latitude,
           location.longitude,
           stops[nextStopIndex].coordinates.latitude,
           stops[nextStopIndex].coordinates.longitude
-        );
+        ) * 1000;
         
         // Calculate distance to destination stop (in meters)
-        const distanceToDestination = calculateDistance(
+        const distanceToDestination = haversineDistance(
           location.latitude,
           location.longitude,
           stops[destinationIndex].coordinates.latitude,
           stops[destinationIndex].coordinates.longitude
-        );
+        ) * 1000;
         
         // Calculate partial progress between current stop and next stop
         if (closestStopIndex < stops.length - 1) {
-          const distanceBetweenStops = calculateDistance(
+          const distanceBetweenStops = haversineDistance(
             stops[closestStopIndex].coordinates.latitude,
             stops[closestStopIndex].coordinates.longitude,
             stops[nextStopIndex].coordinates.latitude,
             stops[nextStopIndex].coordinates.longitude
-          );
+          ) * 1000;
           
           // Calculate progress as percentage (0-100)
           // Invert the percentage since we want 0% at current stop and 100% at next stop
@@ -307,20 +313,8 @@ export default function JourneyTrackingScreen() {
     };
     
     // Haversine formula to calculate distance between two points in meters
-    const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
-      const R = 6371e3; // Earth's radius in meters
-      const φ1 = lat1 * Math.PI / 180;
-      const φ2 = lat2 * Math.PI / 180;
-      const Δφ = (lat2 - lat1) * Math.PI / 180;
-      const Δλ = (lon2 - lon1) * Math.PI / 180;
-      
-      const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
-                Math.cos(φ1) * Math.cos(φ2) *
-                Math.sin(Δλ/2) * Math.sin(Δλ/2);
-      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-      
-      return R * c; // Distance in meters
-    };
+    // Using the unified haversineDistance function from geospatialUtils.ts
+    // Note: haversineDistance returns distance in kilometers, so we multiply by 1000 for meters
     
     // Test mode simulation removed
     

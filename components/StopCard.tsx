@@ -5,6 +5,7 @@ import { MapPin } from 'lucide-react-native';
 interface StopCardProps {
   stopName: string;
   isDestination?: boolean;
+  isCurrent?: boolean;
   estimatedTime?: string;
   onPress: () => void;
 }
@@ -12,6 +13,7 @@ interface StopCardProps {
 export default function StopCard({
   stopName,
   isDestination = false,
+  isCurrent = false,
   estimatedTime,
   onPress,
 }: StopCardProps) {
@@ -19,23 +21,26 @@ export default function StopCard({
     <TouchableOpacity 
       style={[
         styles.container, 
-        isDestination && styles.destinationContainer
+        isDestination && styles.destinationContainer,
+        isCurrent && styles.currentContainer
       ]} 
       onPress={onPress}
     >
       <View style={styles.iconContainer}>
         <MapPin 
           size={20} 
-          color={isDestination ? '#FF8A65' : '#4BB377'} 
+          color={isDestination ? '#FF8A65' : isCurrent ? '#3498DB' : '#4BB377'} 
         />
       </View>
       <View style={styles.contentContainer}>
         <Text style={[
           styles.stopName,
-          isDestination && styles.destinationText
+          isDestination && styles.destinationText,
+          isCurrent && styles.currentText
         ]}>
           {stopName}
           {isDestination && ' ⭐'}
+          {isCurrent && ' (Current)'}
         </Text>
         {estimatedTime && (
           <Text style={styles.timeText}>
@@ -46,6 +51,11 @@ export default function StopCard({
       {isDestination && (
         <View style={styles.destinationBadge}>
           <Text style={styles.destinationBadgeText}>Your Stop!</Text>
+        </View>
+      )}
+      {isCurrent && !isDestination && (
+        <View style={styles.currentBadge}>
+          <Text style={styles.currentBadgeText}>Current</Text>
         </View>
       )}
     </TouchableOpacity>
@@ -71,6 +81,10 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#FF8A65',
   },
+  currentContainer: {
+    borderWidth: 2,
+    borderColor: '#3498DB',
+  },
   iconContainer: {
     marginRight: 12,
   },
@@ -86,6 +100,10 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#FF8A65',
   },
+  currentText: {
+    fontWeight: '600',
+    color: '#3498DB',
+  },
   timeText: {
     fontSize: 14,
     color: '#6B7280',
@@ -98,6 +116,17 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   destinationBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  currentBadge: {
+    backgroundColor: '#3498DB',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+  },
+  currentBadgeText: {
     color: '#FFFFFF',
     fontSize: 12,
     fontWeight: '600',

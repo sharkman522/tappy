@@ -16,6 +16,14 @@ import {
   AppTransportService
 } from '../types/lta-api';
 import { ltaApi } from './supabase';
+import {
+  haversineDistance,
+  findKNearestBusStops,
+  findKNearestTrainStations,
+  createBusStopSpatialIndex,
+  calculateBearing,
+  isPointNearPath
+} from '../utils/geospatialUtils';
 
 // Cache keys
 const CACHE_KEYS = {
@@ -469,7 +477,7 @@ export const getBusStopName = async (busStopCode: string): Promise<string> => {
   }
 };
 
-// Get nearby bus stops based on coordinates
+// Get nearby bus stops based on coordinates using optimized K-nearest neighbors algorithm
 export const getNearbyBusStops = async (
   latitude: number, 
   longitude: number, 
@@ -478,23 +486,24 @@ export const getNearbyBusStops = async (
   try {
     const busStops = await getBusStops();
     
-    // Calculate distances and filter by radius (in km)
-    return busStops.filter(stop => {
-      const distance = calculateDistance(
-        latitude, 
-        longitude, 
-        stop.coordinates.latitude, 
-        stop.coordinates.longitude
-      );
-      return distance <= radius;
-    });
+    // Use spatial indexing for large datasets (> 1000 bus stops)
+    if (busStops.length > 1000) {
+      // Create a spatial index for efficient lookup
+      const spatialIndex = createBusStopSpatialIndex(busStops);
+      return spatialIndex.findNearby(latitude, longitude, radius);
+    } else {
+      // For smaller datasets, use the K-nearest neighbors algorithm
+      // Get more stops than needed and then filter by radius
+      const kNearest = findKNearestBusStops(latitude, longitude, busStops, Math.min(50, busStops.length));
+      return kNearest.filter(stop => stop.distance <= radius);
+    }
   } catch (error) {
     console.error('Error getting nearby bus stops:', error);
     throw error;
   }
 };
 
-// Get nearby train stations based on coordinates
+// Get nearby train stations based on coordinates using optimized K-nearest neighbors algorithm
 export const getNearbyTrainStations = async (
   latitude: number, 
   longitude: number, 
@@ -503,43 +512,24 @@ export const getNearbyTrainStations = async (
   try {
     const trainStations = await getTrainStations();
     
-    // Calculate distances and filter by radius (in km)
-    return trainStations.filter(station => {
-      const distance = calculateDistance(
-        latitude, 
-        longitude, 
-        station.coordinates.latitude, 
-        station.coordinates.longitude
-      );
-      return distance <= radius;
-    });
+    // Use K-nearest neighbors algorithm
+    // Get more stations than needed and then filter by radius
+    const kNearest = findKNearestTrainStations(
+      latitude, 
+      longitude, 
+      trainStations, 
+      Math.min(20, trainStations.length)
+    );
+    
+    return kNearest.filter(station => station.distance <= radius);
   } catch (error) {
     console.error('Error getting nearby train stations:', error);
     throw error;
   }
 };
 
-// Calculate distance between two coordinates using Haversine formula
-const calculateDistance = (
-  lat1: number, 
-  lon1: number, 
-  lat2: number, 
-  lon2: number
-): number => {
-  const R = 6371; // Radius of the Earth in km
-  const dLat = deg2rad(lat2 - lat1);
-  const dLon = deg2rad(lon2 - lon1);
-  const a = 
-    Math.sin(dLat/2) * Math.sin(dLat/2) +
-    Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) * 
-    Math.sin(dLon/2) * Math.sin(dLon/2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-  return R * c; // Distance in km
-};
-
-const deg2rad = (deg: number): number => {
-  return deg * (Math.PI/180);
-};
+// Use the haversineDistance function from geospatialUtils instead
+const calculateDistance = haversineDistance;
 
 // Search functionality
 export interface SearchResult {
@@ -684,25 +674,46 @@ export const removeFavoriteRoute = async (routeId: string): Promise<void> => {
   }
 };
 
-// Get nearby transport services (bus and train)
+// Get nearby transport services (bus and train) using optimized geospatial algorithms
 export const getNearbyTransportServices = async (
   latitude: number,
   longitude: number
 ): Promise<AppTransportService[]> => {
   try {
-    // Get nearby bus stops
+    // Get nearby bus stops (already sorted by distance using optimized algorithms)
     const busStops = await getNearbyBusStops(latitude, longitude);
     
     // Get bus arrivals for each stop
     const busServices: AppBusService[] = [];
     const favorites = await getFavoriteRoutes();
     
-    // Limit to first 3 bus stops to avoid too many API calls
-    const limitedBusStops = busStops.slice(0, 3);
+    // Limit to closest 5 bus stops to avoid too many API calls but ensure we get the nearest ones
+    // This is now more accurate since we're using optimized spatial indexing
+    const limitedBusStops = busStops.slice(0, 5);
     
-    for (const stop of limitedBusStops) {
+    // Create a map to store bus stop distances for later use in sorting
+    const busStopDistances = new Map<string, number>();
+    limitedBusStops.forEach(stop => {
+      busStopDistances.set(stop.BusStopCode, stop.distance || 0);
+    });
+    
+    // Calculate bearing from user to each bus stop for directional context
+    const busStopBearings = new Map<string, number>();
+    limitedBusStops.forEach(stop => {
+      const bearing = calculateBearing(
+        latitude,
+        longitude,
+        stop.coordinates.latitude,
+        stop.coordinates.longitude
+      );
+      busStopBearings.set(stop.BusStopCode, bearing);
+    });
+    
+    // Process each bus stop in parallel for better performance
+    const busServicePromises = limitedBusStops.map(async (stop) => {
       try {
         const arrivals = await getBusArrivals(stop.BusStopCode);
+        const stopServices: AppBusService[] = [];
         
         // Create app bus services from arrivals
         for (const arrival of arrivals) {
@@ -711,24 +722,54 @@ export const getNearbyTransportServices = async (
             const id = `${arrival.ServiceNo}-${stop.BusStopCode}`;
             const destinationName = await getBusStopName(arrival.NextBus.DestinationCode);
             
-            busServices.push({
+            stopServices.push({
               id,
               type: 'bus',
               routeNumber: `Bus ${arrival.ServiceNo}`,
               destination: destinationName,
               time: `Next in ${formatArrivalTime(arrival.NextBus.EstimatedArrival)}`,
-              isFavorite: favorites.includes(id)
+              isFavorite: favorites.includes(id),
+              // Add distance to the bus service for sorting
+              distance: busStopDistances.get(stop.BusStopCode) || 999,
+              // Add bus stop code for reference
+              busStopCode: stop.BusStopCode,
+              // Add bus stop name for display
+              busStopName: stop.Description,
+              // Add bearing information for directional context
+              bearing: busStopBearings.get(stop.BusStopCode)
             });
           }
         }
+        
+        return stopServices;
       } catch (error) {
         console.error(`Error getting bus arrivals for stop ${stop.BusStopCode}:`, error);
-        // Continue with next stop
+        return [];
       }
-    }
+    });
     
-    // Get nearby train stations
+    // Wait for all bus service requests to complete
+    const busServiceResults = await Promise.all(busServicePromises);
+    
+    // Flatten the array of arrays
+    busServiceResults.forEach(services => {
+      busServices.push(...services);
+    });
+    
+    // Get nearby train stations (already sorted by distance using optimized algorithms)
     const trainStations = await getNearbyTrainStations(latitude, longitude);
+    
+    // Calculate bearing from user to each train station for directional context
+    const trainStationBearings = new Map<string, number>();
+    trainStations.forEach(station => {
+      const bearing = calculateBearing(
+        latitude,
+        longitude,
+        station.coordinates.latitude,
+        station.coordinates.longitude
+      );
+      trainStationBearings.set(station.StationCode, bearing);
+    });
     
     // For trains, we don't have real-time arrivals through the API
     // So we'll create generic train services for each nearby station
@@ -753,17 +794,30 @@ export const getNearbyTransportServices = async (
         routeNumber: lineName,
         destination: station.name,
         time: 'Check platform display',
-        isFavorite: favorites.includes(id)
+        isFavorite: favorites.includes(id),
+        // Add distance to the train service for sorting
+        distance: station.distance || 999,
+        // Add bearing information for directional context
+        bearing: trainStationBearings.get(station.StationCode)
       };
     });
     
-    // Combine and sort services
-    return [...busServices, ...trainServices].sort((a, b) => {
+    // Advanced sorting algorithm that considers multiple factors
+    const sortedServices = [...busServices, ...trainServices].sort((a, b) => {
       // Sort favorites first
       if (a.isFavorite && !b.isFavorite) return -1;
       if (!a.isFavorite && b.isFavorite) return 1;
       
-      // Then sort by estimated arrival time (if available)
+      // Then sort by physical distance (closest first)
+      const distanceA = a.distance || 999;
+      const distanceB = b.distance || 999;
+      
+      // If distance difference is significant (more than 100 meters)
+      if (Math.abs(distanceA - distanceB) > 0.1) {
+        return distanceA - distanceB;
+      }
+      
+      // For services at similar distances, sort by arrival time
       const timeA = a.time.includes('min') 
         ? parseInt(a.time.match(/\d+/)?.[0] || '999', 10)
         : 999;
@@ -771,8 +825,22 @@ export const getNearbyTransportServices = async (
         ? parseInt(b.time.match(/\d+/)?.[0] || '999', 10)
         : 999;
       
-      return timeA - timeB;
+      // If arrival times are significantly different
+      if (Math.abs(timeA - timeB) > 2) {
+        return timeA - timeB;
+      }
+      
+      // For services with similar distances and arrival times,
+      // prioritize bus services over train services as they're typically more frequent
+      if (a.type !== b.type) {
+        return a.type === 'bus' ? -1 : 1;
+      }
+      
+      // If all else is equal, sort by service number for consistency
+      return a.routeNumber.localeCompare(b.routeNumber);
     });
+    
+    return sortedServices;
   } catch (error) {
     console.error('Error getting nearby transport services:', error);
     throw error;

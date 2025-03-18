@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-nati
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, router } from 'expo-router';
 import { ArrowLeft, Heart, Clock, Bus } from 'lucide-react-native';
+import { haversineDistance, findKNearestBusStops, findClosestStop } from '@/utils/geospatialUtils';
 
 // Components
 import TappyCharacter from '@/components/TappyCharacter';
@@ -66,6 +67,7 @@ export default function RouteDetailsScreen() {
   const [tappyAnimating, setTappyAnimating] = useState(false);
   const [closestStopIndex, setClosestStopIndex] = useState<number>(-1);
   const [isLoadingLocation, setIsLoadingLocation] = useState(false);
+  const [stopsWithDistance, setStopsWithDistance] = useState<any[]>([]);
   
   // Get LTA context data
   const { favorites, toggleFavorite } = useLTA();
@@ -84,33 +86,39 @@ export default function RouteDetailsScreen() {
     typeof busStopCode === 'string' ? busStopCode : undefined // Ensure busStopCode is a string
   );
   
-  // Find the closest stop to the user's current location
+  // Find the closest stop to the user's current location using the unified geospatial algorithm
   useEffect(() => {
     if (contentType !== 'bus' || stops.length === 0) return;
     
-    const findClosestStop = async () => {
+    const findClosestStopAndUpdate = async () => {
       setIsLoadingLocation(true);
       try {
         // Get user's current location
         const userLocation = await locationService.getCurrentLocation();
         console.log('[RouteDetailsScreen] User location:', userLocation);
         
-        // Calculate distances to all stops
-        const distances = stops.map(stop => {
-          return calculateDistance(
-            userLocation.latitude,
-            userLocation.longitude,
-            stop.coordinates.latitude,
-            stop.coordinates.longitude
-          );
-        });
+        // Use the unified findClosestStop function from geospatialUtils with 1km max distance threshold
+        const { closestStop, closestStopIndex, stopsWithDistance: updatedStopsWithDistance } = findClosestStop(
+          userLocation.latitude,
+          userLocation.longitude,
+          stops,
+          1 // 1km max distance threshold
+        );
         
-        // Find the closest stop
-        const closestIndex = distances.indexOf(Math.min(...distances));
-        console.log('[RouteDetailsScreen] Closest stop index:', closestIndex, 'Name:', stops[closestIndex]?.name);
+        // Store the updated stops with distance information
+        setStopsWithDistance(updatedStopsWithDistance);
         
-        setClosestStopIndex(closestIndex);
-        setTappyMessage(`Where would you like to go?`);
+        if (closestStopIndex === -1) {
+          console.log('[RouteDetailsScreen] No stops within 1km of user location');
+          setClosestStopIndex(-1);
+          setTappyMessage(`Where would you like to go? (No stops nearby)`); 
+        } else {
+          console.log('[RouteDetailsScreen] Closest stop index:', closestStopIndex, 
+                      'Name:', stops[closestStopIndex]?.name, 
+                      'Distance:', closestStop?.distance.toFixed(2) + 'km');
+          setClosestStopIndex(closestStopIndex);
+          setTappyMessage(`Where would you like to go?`);
+        }
       } catch (error) {
         console.error('[RouteDetailsScreen] Error finding closest stop:', error);
       } finally {
@@ -118,24 +126,11 @@ export default function RouteDetailsScreen() {
       }
     };
     
-    findClosestStop();
+    findClosestStopAndUpdate();
   }, [stops, contentType]);
   
-  // Haversine formula to calculate distance between two points in meters
-  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
-    const R = 6371e3; // Earth's radius in meters
-    const φ1 = lat1 * Math.PI / 180;
-    const φ2 = lat2 * Math.PI / 180;
-    const Δφ = (lat2 - lat1) * Math.PI / 180;
-    const Δλ = (lon2 - lon1) * Math.PI / 180;
-    
-    const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
-              Math.cos(φ1) * Math.cos(φ2) *
-              Math.sin(Δλ/2) * Math.sin(Δλ/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    
-    return R * c; // Distance in meters
-  };
+  // We're now using the unified findClosestStop function from geospatialUtils
+  // which internally uses haversineDistance for consistent calculations
   console.log('[RouteDetailsScreen] useRouteStops result:', { 
     stopsCount: stops?.length, 
     loading, 
@@ -369,9 +364,9 @@ export default function RouteDetailsScreen() {
               </Text>
             ) : stops.length > 0 || (allStops && allStops.length > 0) ? (
               // Show either filtered stops (future only) or all stops based on toggle
-              // Only show stops that come after the closest stop to the user's current location
+              // Include the closest stop and all stops after it
               (showPastStops && allStops ? allStops : stops)
-                .filter((stop, index) => closestStopIndex === -1 || index > closestStopIndex)
+                .filter((stop, index) => closestStopIndex === -1 || index >= closestStopIndex)
                 .map((stop, index, filteredArray) => {
                   // Recalculate the stops away based only on the visible stops
                   let displayTime = stop.time;
@@ -382,12 +377,25 @@ export default function RouteDetailsScreen() {
                     displayTime = stopsAway === 1 ? '1 stop away' : `${stopsAway} stops away`;
                   }
                   
+                  // Find the matching stop with distance information
+                  const stopWithDistance = stopsWithDistance.find(s => s.id === stop.id) || stop;
+                  
+                  // Add distance information if available
+                  const distanceText = stopWithDistance.distance ? 
+                    ` (${(stopWithDistance.distance * 1000).toFixed(0)}m)` : 
+                    '';
+                  
+                  // Determine if this is the closest stop to the user's current location
+                  // Only mark as current if closestStopIndex is valid (not -1)
+                  const isCurrentStop = closestStopIndex !== -1 && stops.indexOf(stop) === closestStopIndex;
+                  
                   return (
                     <StopCard
                       key={`${stop.id}-${stop.stopSequence || index}`}
                       stopName={stop.name}
-                      estimatedTime={displayTime}
+                      estimatedTime={`${displayTime}${distanceText}`}
                       isDestination={stop.id === selectedStop}
+                      isCurrent={isCurrentStop}
                       onPress={() => handleStopSelect(stop.id, stop.name)}
                     />
                   );

@@ -95,6 +95,8 @@ export interface AppBusStop extends BusStop {
     latitude: number;
     longitude: number;
   };
+  distance?: number; // Distance from user's location in km
+  bearing?: number; // Bearing from user's location to the bus stop (0-360 degrees)
   stopSequence?: number; // Sequence number of the stop in the route
   direction?: number; // Direction of the bus route
   time?: string; // Display information about the stop (e.g., "Next stop", "2 stops away")
@@ -109,6 +111,10 @@ export interface AppBusService {
   destination: string; // From stop description
   time: string; // Formatted arrival time
   isFavorite: boolean;
+  distance?: number; // Distance from user's location in km
+  bearing?: number; // Bearing from user's location to the bus stop (0-360 degrees)
+  busStopCode?: string; // The bus stop code this service is associated with
+  busStopName?: string; // The name of the bus stop this service is associated with
 }
 
 export interface AppTrainStation extends TrainStation {
@@ -118,6 +124,8 @@ export interface AppTrainStation extends TrainStation {
     latitude: number;
     longitude: number;
   };
+  distance?: number; // Distance from user's location in km
+  bearing?: number; // Bearing from user's location to the train station (0-360 degrees)
 }
 
 export interface AppTrainService {
@@ -127,6 +135,8 @@ export interface AppTrainService {
   destination: string; // Terminal station
   time: string; // From schedule or just "Next train" if real-time not available
   isFavorite: boolean;
+  distance?: number; // Distance from user's location in km
+  bearing?: number; // Bearing from user's location to the train station (0-360 degrees)
 }
 
 export type AppTransportService = AppBusService | AppTrainService;
