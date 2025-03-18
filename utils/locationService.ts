@@ -1,119 +1,90 @@
-import { Platform } from 'react-native';
+import * as Location from 'expo-location';
 
 interface Coordinates {
   latitude: number;
   longitude: number;
 }
 
-let mockEnabled = false;
-let mockRoute: Coordinates[] = [];
-let mockCurrentIndex = 0;
-let mockWatchId: NodeJS.Timeout | null = null;
 let currentLocationSubscribers: ((location: Coordinates) => void)[] = [];
 
-// Main location service with test mode support
+// Default location (Singapore) for fallback
+const DEFAULT_LOCATION: Coordinates = { latitude: 1.3521, longitude: 103.8198 };
+
+// Real location service without mock functionality
 export const locationService = {
-  // Initialize location services
-  async init() {
-    // Always return true for web/simplified implementation
-    return true;
+  // Initialize location services and request permissions
+  async init(): Promise<boolean> {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        console.log('Location permission denied');
+        return false;
+      }
+      return true;
+    } catch (error) {
+      console.error('Error initializing location service:', error);
+      return false;
+    }
   },
 
-  // Get current location
+  // Get current location with high accuracy
   async getCurrentLocation(): Promise<Coordinates> {
-    if (mockEnabled && mockRoute.length > 0) {
-      return mockRoute[mockCurrentIndex];
-    }
-
     try {
-      // Use the Expo Location API to get the actual device location
-      // Import the Location API at the top of the file
-      const Location = require('expo-location');
-      
-      // Request permission first
-      const { status } = await Location.requestForegroundPermissionsAsync();
+      const { status } = await Location.getForegroundPermissionsAsync();
       
       if (status !== 'granted') {
-        console.log('Location permission denied, using default location');
-        return { latitude: 1.3521, longitude: 103.8198 }; // Default to Singapore
+        console.log('Location permission not granted, using default location');
+        return DEFAULT_LOCATION;
       }
       
-      // Get the actual device location
+      // Get the actual device location with high accuracy
       const location = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.High
       });
       
-      console.log('Got actual device location:', {
-        latitude: location.coords.latitude,
-        longitude: location.coords.longitude
-      });
-      
-      return {
+      const coordinates = {
         latitude: location.coords.latitude,
         longitude: location.coords.longitude
       };
+      
+      console.log('Got actual device location:', coordinates);
+      return coordinates;
     } catch (error) {
       console.error('Error getting location:', error);
-      // Return a default location (Singapore) as fallback
-      return { latitude: 1.3521, longitude: 103.8198 };
+      return DEFAULT_LOCATION;
     }
   },
 
-  // Watch location changes
+  // Watch location changes with optimized settings for transit tracking
   watchLocation(callback: (location: Coordinates) => void): () => void {
+    // Add to subscribers list
     currentLocationSubscribers.push(callback);
 
-    if (mockEnabled && mockRoute.length > 0) {
-      // If already watching, don't start another interval
-      if (mockWatchId === null) {
-        mockWatchId = setInterval(() => {
-          if (mockCurrentIndex < mockRoute.length - 1) {
-            mockCurrentIndex++;
-            const newLocation = mockRoute[mockCurrentIndex];
-            currentLocationSubscribers.forEach(subscriber => subscriber(newLocation));
-          } else {
-            // End of route
-            if (mockWatchId) {
-              clearInterval(mockWatchId);
-              mockWatchId = null;
-            }
-          }
-        }, 3000); // Update every 3 seconds
+    // Set up real location tracking
+    let watchSubscription: Location.LocationSubscription | null = null;
+    let fallbackInterval: NodeJS.Timeout | null = null;
+    
+    // Start watching position with appropriate settings for transit tracking
+    // - timeInterval: 3000ms (3s) for more frequent updates
+    // - distanceInterval: 5m to detect smaller movements
+    // - accuracy: High for better precision
+    Location.requestForegroundPermissionsAsync().then(({ status }) => {
+      if (status !== 'granted') {
+        console.log('Location permission denied for watching, using default');
+        // Use interval with default location as fallback
+        fallbackInterval = setInterval(() => {
+          callback(DEFAULT_LOCATION);
+        }, 3000);
+        return;
       }
-
-      // Return unsubscribe function
-      return () => {
-        currentLocationSubscribers = currentLocationSubscribers.filter(sub => sub !== callback);
-        if (currentLocationSubscribers.length === 0 && mockWatchId) {
-          clearInterval(mockWatchId);
-          mockWatchId = null;
-        }
-      };
-    }
-
-    try {
-      // Use Expo Location API for actual device location tracking
-      const Location = require('expo-location');
       
-      // Request permission first (if not already granted)
-      Location.requestForegroundPermissionsAsync().then(({ status }) => {
-        if (status !== 'granted') {
-          console.log('Location permission denied for watching, using default');
-          // Use interval with default location as fallback
-          const intervalId = setInterval(() => {
-            callback({ latitude: 1.3521, longitude: 103.8198 });
-          }, 5000);
-          
-          return () => {
-            clearInterval(intervalId);
-            currentLocationSubscribers = currentLocationSubscribers.filter(sub => sub !== callback);
-          };
-        }
-      });
-      
-      // Start watching position with high accuracy
-      const watchId = Location.watchPositionAsync(
-        { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 10 },
+      // Start watching with optimized settings for transit tracking
+      Location.watchPositionAsync(
+        { 
+          accuracy: Location.Accuracy.High, 
+          timeInterval: 3000,  // Update every 3 seconds
+          distanceInterval: 5  // Update after moving 5 meters
+        },
         (position) => {
           const location = {
             latitude: position.coords.latitude,
@@ -122,59 +93,42 @@ export const locationService = {
           console.log('Location update:', location);
           callback(location);
         }
-      );
+      ).then(subscription => {
+        watchSubscription = subscription;
+      }).catch(error => {
+        console.error('Error setting up location watching:', error);
+        // Fallback to interval with default location
+        fallbackInterval = setInterval(() => {
+          callback(DEFAULT_LOCATION);
+        }, 3000);
+      });
+    });
+    
+    // Return unsubscribe function
+    return () => {
+      // Remove from subscribers list
+      currentLocationSubscribers = currentLocationSubscribers.filter(sub => sub !== callback);
       
-      // Return unsubscribe function
-      return () => {
-        watchId.then(subscription => subscription.remove());
-        currentLocationSubscribers = currentLocationSubscribers.filter(sub => sub !== callback);
-      };
-    } catch (error) {
-      console.error('Error setting up location watching:', error);
+      // Clean up location watching
+      if (watchSubscription) {
+        watchSubscription.remove();
+      }
       
-      // Fallback to interval with default location
-      const intervalId = setInterval(() => {
-        callback({ latitude: 1.3521, longitude: 103.8198 });
-      }, 5000);
-      
-      return () => {
-        clearInterval(intervalId);
-        currentLocationSubscribers = currentLocationSubscribers.filter(sub => sub !== callback);
-      };
-    }
+      // Clean up fallback interval if it exists
+      if (fallbackInterval) {
+        clearInterval(fallbackInterval);
+      }
+    };
   },
 
-  // Enable test mode with a predefined route
-  enableTestMode(route: Coordinates[]) {
-    mockEnabled = true;
-    mockRoute = route;
-    mockCurrentIndex = 0;
-    return true;
-  },
-
-  // Disable test mode
+  // These methods are kept for API compatibility but now do nothing
   disableTestMode() {
-    mockEnabled = false;
-    if (mockWatchId) {
-      clearInterval(mockWatchId);
-      mockWatchId = null;
-    }
+    // No-op - test mode is removed
     return true;
   },
 
-  // Check if test mode is enabled
   isTestModeEnabled() {
-    return mockEnabled;
-  },
-
-  // For testing: manually set the current position in the route
-  setMockPosition(index: number) {
-    if (mockEnabled && index >= 0 && index < mockRoute.length) {
-      mockCurrentIndex = index;
-      const newLocation = mockRoute[mockCurrentIndex];
-      currentLocationSubscribers.forEach(subscriber => subscriber(newLocation));
-      return true;
-    }
+    // Always return false since test mode is removed
     return false;
   }
 };

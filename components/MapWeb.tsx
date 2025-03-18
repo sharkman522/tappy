@@ -109,11 +109,15 @@ export default function MapWeb(props: MapWebProps) {
     else if (stopIndex === currentStopIndex - stops.indexOf(visibleStops[0]) + 1) {
       // Use the partial progress from props if available, otherwise calculate it
       if (partialProgress !== undefined) {
+        // Use the partialProgress directly - this value now represents the percentage
+        // of the total potential distance between stops that has been traveled
         connectorProgress = partialProgress;
+        console.log(`[MapWeb] Using partialProgress for connector ${stopIndex}: ${partialProgress}%`);
       } else {
-        // Calculate partial progress based on overall progress
+        // Fallback calculation if partialProgress is not provided
         const segmentProgress = (progress % (100 / totalStopsInJourney)) * totalStopsInJourney;
         connectorProgress = Math.min(100, segmentProgress * 2); // Amplify for better visual effect
+        console.log(`[MapWeb] Using fallback progress for connector ${stopIndex}: ${connectorProgress}%`);
       }
     }
     

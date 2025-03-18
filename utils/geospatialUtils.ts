@@ -34,6 +34,21 @@ export const haversineDistance = (
   lat2: number,
   lon2: number
 ): number => {
+  // For very small distances, use a faster approximation
+  // This is a significant optimization for nearby points
+  const latDiff = Math.abs(lat2 - lat1);
+  const lonDiff = Math.abs(lon2 - lon1);
+  
+  // If points are very close, use a faster approximation
+  if (latDiff < 0.01 && lonDiff < 0.01) {
+    // Quick distance calculation for nearby points (within ~1km)
+    // Uses equirectangular approximation which is much faster
+    const x = deg2rad(lon2 - lon1) * Math.cos(deg2rad((lat1 + lat2) / 2));
+    const y = deg2rad(lat2 - lat1);
+    return EARTH_RADIUS_KM * Math.sqrt(x * x + y * y);
+  }
+  
+  // For larger distances, use the full Haversine formula
   const dLat = deg2rad(lat2 - lat1);
   const dLon = deg2rad(lon2 - lon1);
   
@@ -118,65 +133,61 @@ export const findKNearestTrainStations = (
 };
 
 /**
- * Creates a spatial index for stops (bus stops or train stations) using a simplified grid-based approach
- * This is more efficient than computing distances for all stops when dealing with large datasets
+ * Optimized spatial indexing for faster location queries
+ * Uses a combination of pre-filtering and efficient distance calculations
  * 
- * @param stops - Array of stops to index (bus stops or train stations)
- * @param gridSize - Size of grid cells in degrees (default: 0.01, roughly 1km)
- * @returns A spatial index for quick proximity lookups
+ * @param stops - Array of stops (bus stops or train stations)
+ * @returns Object with methods to find nearby stops
  */
 export const createSpatialIndex = <T extends { coordinates: { latitude: number, longitude: number } }>(
   stops: T[],
-  gridSize: number = 0.01
 ) => {
-  const gridIndex: { [key: string]: T[] } = {};
+  // Pre-compute bounding box for quick filtering
+  const bounds = {
+    minLat: Number.MAX_VALUE,
+    maxLat: Number.MIN_VALUE,
+    minLon: Number.MAX_VALUE,
+    maxLon: Number.MIN_VALUE
+  };
   
-  // Place each stop in a grid cell
+  // Find the bounding box of all stops
   stops.forEach(stop => {
-    // Calculate grid cell coordinates
-    const gridX = Math.floor(stop.coordinates.longitude / gridSize);
-    const gridY = Math.floor(stop.coordinates.latitude / gridSize);
-    const gridKey = `${gridX}:${gridY}`;
-    
-    // Add to grid
-    if (!gridIndex[gridKey]) {
-      gridIndex[gridKey] = [];
-    }
-    gridIndex[gridKey].push(stop);
+    bounds.minLat = Math.min(bounds.minLat, stop.coordinates.latitude);
+    bounds.maxLat = Math.max(bounds.maxLat, stop.coordinates.latitude);
+    bounds.minLon = Math.min(bounds.minLon, stop.coordinates.longitude);
+    bounds.maxLon = Math.max(bounds.maxLon, stop.coordinates.longitude);
   });
   
   /**
-   * Find nearby stops using the spatial index
+   * Find nearby stops within a radius using optimized filtering
    * 
    * @param lat - Latitude to search around
    * @param lon - Longitude to search around
    * @param radiusKm - Search radius in kilometers
-   * @returns Array of stops within the radius
+   * @returns Array of stops within the radius with distance information
    */
   const findNearby = (lat: number, lon: number, radiusKm: number): (T & { distance: number })[] => {
-    // Convert radius to approximate grid cells
-    // 0.01 degrees is roughly 1km at the equator
-    const gridRadius = Math.ceil(radiusKm / (gridSize * 111));
+    // Quick bounding box check to see if we're even in the area
+    // This avoids unnecessary calculations for points far outside the area
+    const latDelta = radiusKm / 111; // Rough approximation: 1 degree lat ≈ 111km
+    const lonDelta = radiusKm / (111 * Math.cos(deg2rad(lat))); // Adjust for longitude
     
-    // Calculate user's grid cell
-    const userGridX = Math.floor(lon / gridSize);
-    const userGridY = Math.floor(lat / gridSize);
-    
-    // Collect stops from nearby grid cells
-    const nearbyStops: T[] = [];
-    
-    // Search in surrounding grid cells
-    for (let x = userGridX - gridRadius; x <= userGridX + gridRadius; x++) {
-      for (let y = userGridY - gridRadius; y <= userGridY + gridRadius; y++) {
-        const key = `${x}:${y}`;
-        if (gridIndex[key]) {
-          nearbyStops.push(...gridIndex[key]);
-        }
-      }
+    if (lat < bounds.minLat - latDelta || lat > bounds.maxLat + latDelta ||
+        lon < bounds.minLon - lonDelta || lon > bounds.maxLon + lonDelta) {
+      return []; // Outside the area entirely
     }
     
-    // Calculate actual distances and filter by radius
-    return nearbyStops
+    // Pre-filter stops that are definitely too far away using bounding box
+    const potentialStops = stops.filter(stop => {
+      const latDiff = Math.abs(stop.coordinates.latitude - lat);
+      const lonDiff = Math.abs(stop.coordinates.longitude - lon);
+      
+      // Quick rectangular check (much faster than calculating actual distances)
+      return latDiff <= latDelta && lonDiff <= lonDelta;
+    });
+    
+    // Calculate actual distances only for the pre-filtered stops
+    return potentialStops
       .map(stop => {
         const distance = haversineDistance(
           lat,
@@ -184,8 +195,6 @@ export const createSpatialIndex = <T extends { coordinates: { latitude: number, 
           stop.coordinates.latitude,
           stop.coordinates.longitude
         );
-        // Create a new object with all original properties plus the distance
-        // This ensures we keep properties like BusStopCode, Description, etc.
         return { ...stop, distance };
       })
       .filter(stop => stop.distance <= radiusKm)
@@ -193,7 +202,7 @@ export const createSpatialIndex = <T extends { coordinates: { latitude: number, 
   };
   
   /**
-   * Find the k nearest stops to a point
+   * Find the k nearest stops to a point with optimized performance
    * 
    * @param point - Point to search around {x: longitude, y: latitude}
    * @param k - Number of nearest stops to return
@@ -204,24 +213,21 @@ export const createSpatialIndex = <T extends { coordinates: { latitude: number, 
     // Convert maxDistance from meters to kilometers
     const radiusKm = maxDistance / 1000;
     
-    // Find all stops within the radius
-    const nearbyStops = findNearby(point.y, point.x, radiusKm);
+    // Use the optimized findNearby function with a generous initial radius
+    let nearbyStops = findNearby(point.y, point.x, radiusKm);
+    
+    // If we don't have enough stops, try with a larger radius
+    if (nearbyStops.length < k) {
+      nearbyStops = findNearby(point.y, point.x, radiusKm * 2);
+    }
     
     // Return the k nearest stops
-    // We're returning the original stop objects with distance added
-    return nearbyStops
-      .slice(0, k)
-      .map(stop => {
-        // Create a new object with the distance property
-        return stop as T;
-      });
+    return nearbyStops.slice(0, k) as T[];
   };
   
   return {
     findNearby,
-    nearest,
-    // Return the raw index for advanced usage
-    gridIndex
+    nearest
   };
 };
 
@@ -265,7 +271,7 @@ export const calculateBearing = (
  * @param maxDistanceKm - Maximum distance in kilometers to consider a stop as "closest" (default: 1km)
  * @returns Object containing the closest stop, its index, and all stops with distance information
  */
-export const findClosestStop = <T extends { id: string; coordinates: { latitude: number; longitude: number } }>(  
+export const findClosestStop = <T extends { id: string; coordinates: { latitude: number; longitude: number } }>(
   userLat: number,
   userLon: number,
   stops: T[],
@@ -282,40 +288,15 @@ export const findClosestStop = <T extends { id: string; coordinates: { latitude:
     return { closestStop: null, closestStopIndex: -1, stopsWithDistance: [] };
   }
   
-  // Create a temporary spatial index for these stops if we have more than 20 stops
-  // This significantly improves performance for large datasets
-  let stopsWithDistance: (T & { distance: number })[];
+  // Optimization: Create a temporary spatial index for faster lookup
+  const tempIndex = createSpatialIndex(stops);
   
-  if (stops.length > 20) {
-    // Use spatial indexing for better performance with larger datasets
-    console.log(`[findClosestStop] Using spatial index for ${stops.length} stops`);
-    const tempIndex = createSpatialIndex(stops);
-    
-    // Get the 10 nearest stops using the spatial index (much faster than calculating all distances)
-    const nearestStops = tempIndex.nearest(
-      { x: userLon, y: userLat },
-      10, // We only need a small number of nearest stops
-      maxDistanceKm * 1000 // Convert to meters
-    ) as (T & { distance: number })[];
-    
-    // Sort by distance
-    stopsWithDistance = nearestStops.sort((a, b) => a.distance - b.distance);
-  } else {
-    // For small datasets, just calculate all distances directly
-    // Calculate distances for all stops
-    stopsWithDistance = stops.map(stop => {
-      const distance = haversineDistance(
-        userLat,
-        userLon,
-        stop.coordinates.latitude,
-        stop.coordinates.longitude
-      );
-      return { ...stop, distance };
-    }).sort((a, b) => a.distance - b.distance);
-  }
+  // Use the optimized spatial index to find nearby stops
+  // This is much faster than calculating distances for all stops
+  const stopsWithDistance = tempIndex.findNearby(userLat, userLon, maxDistanceKm);
   
   // Find the closest stop
-  const closestStop = stopsWithDistance[0];
+  const closestStop = stopsWithDistance.length > 0 ? stopsWithDistance[0] : null;
   
   // If the closest stop is too far away, don't consider it as "current"
   if (!closestStop || closestStop.distance > maxDistanceKm) {

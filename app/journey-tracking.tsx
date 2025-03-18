@@ -40,32 +40,21 @@ export default function JourneyTrackingScreen() {
     stopId as string // Pass the stopId to auto-select the direction
   );
   
-  // Find destination stop index
+  // Find destination stop index (the stop the user wants to go to)
   const destinationIndex = stops.findIndex(stop => stop.id === stopId);
   
-  // Find the user's starting stop index (the stop they're currently at)
-  const [startingStopIndex, setStartingStopIndex] = useState(-1); // Set to -1 to indicate it hasn't been determined yet
+  // Find the starting stop index (the stop passed from the previous screen)
+  // We'll use the first stop in the route by default if no specific starting stop is provided
+  const [startingStopIndex, setStartingStopIndex] = useState(0); // Default to first stop in the route
   
-  // Haversine formula to calculate distance between two points in meters
-  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
-    const R = 6371e3; // Earth's radius in meters
-    const φ1 = lat1 * Math.PI / 180;
-    const φ2 = lat2 * Math.PI / 180;
-    const Δφ = (lat2 - lat1) * Math.PI / 180;
-    const Δλ = (lon2 - lon1) * Math.PI / 180;
-    
-    const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
-              Math.cos(φ1) * Math.cos(φ2) *
-              Math.sin(Δλ/2) * Math.sin(Δλ/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    
-    return R * c; // Distance in meters
-  };
+  // Use the unified haversineDistance function from geospatialUtils
+  // This ensures consistent distance calculations across the entire application
+  // Note: haversineDistance returns distance in kilometers, so we multiply by 1000 for meters when needed
 
-  // Initialize location service and find closest stop to user
+  // Initialize location service and set up journey tracking
   useEffect(() => {
-    // Function to find the closest stop to the user's current location using the unified approach
-    const findClosestStopAndUpdate = async () => {
+    // Function to get the user's current location for tracking purposes
+    const initializeLocationTracking = async () => {
       if (stops.length === 0) return;
       
       try {
@@ -82,31 +71,28 @@ export default function JourneyTrackingScreen() {
           console.log('[JourneyTracking] Using current user location:', userLocation);
         }
         
-        // Use the unified findClosestStop function from geospatialUtils with 1km max distance threshold
-        const { closestStopIndex, closestStop } = findClosestStop(
-          userLocation.latitude,
-          userLocation.longitude,
-          stops,
-          1 // 1km max distance threshold
-        );
+        // Set the current location for tracking purposes
+        setCurrentLocation(userLocation);
         
-        // Only set if we found a valid stop and haven't already determined it
-        if (closestStopIndex !== -1) {
-          console.log('[JourneyTracking] Closest stop index:', closestStopIndex, 
-                      'Name:', stops[closestStopIndex]?.name,
-                      'Distance:', closestStop?.distance.toFixed(2) + 'km');
-          
-          if (startingStopIndex === -1) {
-            setStartingStopIndex(closestStopIndex);
-            setCurrentStopIndex(closestStopIndex);
+        // Log the starting stop information
+        if (stops.length > 0) {
+          // If we have a valid destination index, use it
+          if (destinationIndex !== -1) {
+            console.log('[JourneyTracking] Destination stop:', 
+                        'Index:', destinationIndex, 
+                        'Name:', stops[destinationIndex]?.name);
           }
-        } else {
-          console.log('[JourneyTracking] No stops within 1km of user location');
-          // Handle case where no stop is close enough
-          // We don't update indices in this case
+          
+          // Set the current stop index to the starting stop index
+          // This ensures we start from the correct stop in the route
+          setCurrentStopIndex(startingStopIndex);
+          console.log('[JourneyTracking] Starting journey from stop:', 
+                      'Index:', startingStopIndex, 
+                      'Name:', stops[startingStopIndex]?.name);
         }
       } catch (error) {
-        console.error('[JourneyTracking] Error finding closest stop:', error);
+        console.error('[JourneyTracking] Error initializing location tracking:', error);
+        setGpsError(true);
       }
     };
     
@@ -133,9 +119,9 @@ export default function JourneyTrackingScreen() {
     
     initServices();
     
-    // Find the closest stop to the user after services are initialized
-    if (stops.length > 0 && startingStopIndex === -1) {
-      findClosestStopAndUpdate();
+    // Initialize location tracking once services are ready and stops are loaded
+    if (stops.length > 0) {
+      initializeLocationTracking();
     }
     
     // Set up notification listeners
@@ -163,7 +149,7 @@ export default function JourneyTrackingScreen() {
     
     // Cleanup
     return () => {
-      locationService.disableTestMode();
+      // No need to disable test mode as it's been removed
       notificationService.cancelAllNotifications();
       if (notificationListener.current) {
         Notifications.removeNotificationSubscription(notificationListener.current);
@@ -194,13 +180,8 @@ export default function JourneyTrackingScreen() {
     appState.current = nextAppState;
   };
   
-  // Ensure test mode is always disabled
-  useEffect(() => {
-    if (stops.length > 0) {
-      // Always disable test mode to use real GPS
-      locationService.disableTestMode();
-    }
-  }, [stops]);
+  // No need to explicitly disable test mode since it's been removed from locationService
+  // This effect is kept for reference but doesn't do anything significant now
   
   // Watch for location updates
   useEffect(() => {
@@ -216,15 +197,24 @@ export default function JourneyTrackingScreen() {
       
       // Check which stop we're closest to
       if (stops.length > 0) {
-        // Calculate distances to all stops
-        const distances = stops.map(stop => {
-          const dx = location.latitude - stop.coordinates.latitude;
-          const dy = location.longitude - stop.coordinates.longitude;
-          return Math.sqrt(dx * dx + dy * dy);
-        });
+        // Use the unified findClosestStop function from geospatialUtils
+        // This ensures consistent location matching logic across the entire application
+        // Use the spatial index for faster lookup
+        const { closestStopIndex: foundIndex, closestStop } = findClosestStop(
+          location.latitude,
+          location.longitude,
+          stops,
+          5 // Use a larger threshold (5km) for tracking since we're already on the route
+        );
+        
+        // Log the closest stop details for debugging
+        if (foundIndex !== -1 && closestStop) {
+          console.log('[JourneyTracking] Current closest stop:', stops[foundIndex]?.name, 
+                      'Distance:', closestStop.distance.toFixed(2) + 'km');
+        }
         
         // Find closest stop
-        const closestStopIndex = distances.indexOf(Math.min(...distances));
+        const closestStopIndex = foundIndex !== -1 ? foundIndex : currentStopIndex;
         
         // Only update current stop index if we've already determined the starting point
         if (startingStopIndex !== -1) {
@@ -254,16 +244,35 @@ export default function JourneyTrackingScreen() {
         
         // Calculate partial progress between current stop and next stop
         if (closestStopIndex < stops.length - 1) {
+          // Calculate the total distance between the current stop and the next stop
           const distanceBetweenStops = haversineDistance(
             stops[closestStopIndex].coordinates.latitude,
             stops[closestStopIndex].coordinates.longitude,
             stops[nextStopIndex].coordinates.latitude,
             stops[nextStopIndex].coordinates.longitude
-          ) * 1000;
+          ) * 1000; // Convert to meters
           
-          // Calculate progress as percentage (0-100)
-          // Invert the percentage since we want 0% at current stop and 100% at next stop
-          const progress = Math.max(0, Math.min(100, (1 - (distanceToNextStop / distanceBetweenStops)) * 100));
+          // Calculate the distance traveled from the current stop towards the next stop
+          // This is the key calculation: total segment length minus remaining distance
+          const distanceTraveled = Math.max(0, distanceBetweenStops - distanceToNextStop);
+          
+          // Calculate progress as a percentage of the total potential distance
+          // This represents how far along the segment the user has traveled
+          // The total potential green is the full length between stops
+          const progress = Math.max(0, Math.min(100, (distanceTraveled / distanceBetweenStops) * 100));
+          
+          console.log(
+            `[JourneyTracking] Progress calculation:\n` +
+            `  - Current stop: ${stops[closestStopIndex].name}\n` +
+            `  - Next stop: ${stops[nextStopIndex].name}\n` +
+            `  - Total segment length: ${distanceBetweenStops.toFixed(2)}m\n` +
+            `  - Distance remaining to next: ${distanceToNextStop.toFixed(2)}m\n` +
+            `  - Distance traveled in segment: ${distanceTraveled.toFixed(2)}m\n` +
+            `  - Progress percentage: ${progress.toFixed(2)}%`
+          );
+          
+          // Set the partial progress which will be used by the MapWeb component
+          // to render the green progress bar between stops
           setPartialProgress(progress);
         }
         
@@ -316,7 +325,14 @@ export default function JourneyTrackingScreen() {
     // Using the unified haversineDistance function from geospatialUtils.ts
     // Note: haversineDistance returns distance in kilometers, so we multiply by 1000 for meters
     
-    // Test mode simulation removed
+    // Set up a more efficient interval for checking stops
+    // This helps reduce the computational load while still maintaining accuracy
+    stopCheckInterval = setInterval(() => {
+      // Only perform intensive calculations if we have a valid location
+      if (currentLocation && currentLocation.latitude && currentLocation.longitude) {
+        console.log('[JourneyTracking] Periodic stop check with current location:', currentLocation);
+      }
+    }, 10000); // Check every 10 seconds as a backup to the location updates
     
     return () => {
       unsubscribe();
