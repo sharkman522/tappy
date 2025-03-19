@@ -12,7 +12,7 @@ interface CachedLocation {
 
 let currentLocationSubscribers: ((location: Coordinates) => void)[] = [];
 let locationCache: CachedLocation | null = null;
-const CACHE_TTL_MS = 30000; // 1 minute cache TTL
+const CACHE_TTL_MS = 60000; // 1 minute cache TTL
 
 // Default location (Singapore) for fallback
 const DEFAULT_LOCATION: Coordinates = {
