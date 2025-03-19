@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Switch, AppState, AppStateStatus, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, AppState, AppStateStatus, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, router } from 'expo-router';
-import { ArrowLeft, MapPin, TriangleAlert as AlertTriangle, Clock } from 'lucide-react-native';
+import { ArrowLeft, MapPin, Clock } from 'lucide-react-native';
 import * as Notifications from 'expo-notifications';
 
 // Components
@@ -11,7 +11,7 @@ import SpeechBubble from '@/components/SpeechBubble';
 import MapProgressBar from '@/components/MapProgressBar';
 import LoadingIndicator from '@/components/LoadingIndicator';
 
-// Services & Mock Data
+// Services & Utils
 import { locationService } from '@/utils/locationService';
 import { useRouteStops } from '@/utils/ltaDataProvider';
 import { notificationService } from '@/utils/notificationService';
@@ -19,6 +19,10 @@ import { findClosestStop, haversineDistance } from '@/utils/geospatialUtils';
 import * as ltaService from '@/services/lta-service';
 import { BusArrival } from '@/types/lta-api';
 
+// Context
+import { JourneyProvider, useJourney } from '@/context/JourneyContext';
+
+// Wrapper component that provides the JourneyContext
 export default function JourneyTrackingScreen() {
   const { 
     routeId, 
@@ -31,23 +35,7 @@ export default function JourneyTrackingScreen() {
     closestStopIndex, 
     closestStopDistance 
   } = useLocalSearchParams();
-  const [currentStopIndex, setCurrentStopIndex] = useState(0);
-  const [journeyStatus, setJourneyStatus] = useState('Starting your journey...');
-  const [tappyState, setTappyState] = useState<'sleeping' | 'happy' | 'alert'>('sleeping');
-  const [isAlarmTriggered, setIsAlarmTriggered] = useState(false);
-  const [currentLocation, setCurrentLocation] = useState<{latitude: number, longitude: number} | null>(null);
-  const [partialProgress, setPartialProgress] = useState<number>(0);
-  const [busArrivals, setBusArrivals] = useState<BusArrival[]>([]);
-  const [loadingArrivals, setLoadingArrivals] = useState(false);
-  const [showArrivals, setShowArrivals] = useState(false);
-  // Test mode completely removed as requested
-  const [locationPermission, setLocationPermission] = useState(true);
-  const [gpsError, setGpsError] = useState(false);
-  const [notificationPermission, setNotificationPermission] = useState(false);
-  const appState = useRef(AppState.currentState);
-  const notificationListener = useRef<Notifications.Subscription>();
-  const responseListener = useRef<Notifications.Subscription>();
-
+  
   // Get stops for this route from the LTA API
   const { stops: originalStops, loading, error } = useRouteStops(
     routeNumber as string,
@@ -55,25 +43,132 @@ export default function JourneyTrackingScreen() {
     stopId as string // Pass the stopId to auto-select the direction
   );
   
-  // State to hold the sliced stops (from closest stop to the end)
-  const [stops, setStops] = useState<any[]>([]);
+  // Find the closest stop index from the passed parameter or use 0 as default
+  const initialClosestStopIndex = closestStopIndex ? parseInt(closestStopIndex as string, 10) : 0;
   
-  // Find destination stop index (the stop the user wants to go to) in the sliced array
-  // This will always be the last stop in our sliced array if we have a valid destination
-  const destinationIndex = stops && stops.length > 0 ? stops.length - 1 : -1;
+  // Process the stops array to create the journey segment
+  const [processedStops, setProcessedStops] = useState<any[]>([]);
+  const [destinationIndex, setDestinationIndex] = useState(-1);
   
-  // The closest stop will become index 0 in our journey
-  // We'll store the original index for reference
-  const [originalClosestStopIndex, setOriginalClosestStopIndex] = useState(
-    closestStopIndex ? parseInt(closestStopIndex as string, 10) : -1
+  // Process the stops array when originalStops changes
+  useEffect(() => {
+    if (!originalStops || originalStops.length === 0) return;
+    
+    // Validate the index
+    if (initialClosestStopIndex >= 0 && initialClosestStopIndex < originalStops.length) {
+      // Find the destination index in the original stops array
+      const originalDestinationIndex = originalStops.findIndex(stop => stop.id === stopId);
+      
+      // Slice the stops array to start from the closest stop and end at the destination
+      let slicedStops;
+      if (originalDestinationIndex !== -1 && originalDestinationIndex >= initialClosestStopIndex) {
+        // If destination is valid and after the closest stop, slice from closest to destination (inclusive)
+        slicedStops = originalStops.slice(initialClosestStopIndex, originalDestinationIndex + 1);
+        setDestinationIndex(slicedStops.length - 1);
+        console.log(`[JourneyTracking] Sliced stops array from index ${initialClosestStopIndex} to destination index ${originalDestinationIndex}, new length: ${slicedStops.length}`);
+      } else if (originalDestinationIndex !== -1 && originalDestinationIndex < initialClosestStopIndex) {
+        // If destination is before the closest stop, we've already passed it - use only the closest stop
+        slicedStops = [originalStops[initialClosestStopIndex]];
+        setDestinationIndex(0);
+        console.log(`[JourneyTracking] Destination already passed, using only closest stop at index ${initialClosestStopIndex}`);
+      } else {
+        // If no valid destination, slice from closest stop to the end
+        slicedStops = originalStops.slice(initialClosestStopIndex);
+        setDestinationIndex(slicedStops.length - 1);
+        console.log(`[JourneyTracking] No valid destination, sliced stops array from index ${initialClosestStopIndex}, new length: ${slicedStops.length}`);
+      }
+      
+      setProcessedStops(slicedStops);
+    } else {
+      // If invalid index, use the full array
+      setProcessedStops(originalStops);
+      setDestinationIndex(originalStops.length - 1);
+      console.log('[JourneyTracking] Using full stops array, length:', originalStops.length);
+    }
+  }, [originalStops, initialClosestStopIndex, stopId]);
+  
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <LoadingIndicator fullscreen message="Preparing your journey..." />
+      </SafeAreaView>
+    );
+  }
+  
+  if (error || processedStops.length === 0) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.errorView}>
+          <Text style={styles.errorTitle}>Could not load route information</Text>
+          <Text style={styles.errorSubtext}>Please try again later</Text>
+          <TouchableOpacity 
+            style={styles.backButtonLarge}
+            onPress={() => router.back()}
+          >
+            <Text style={styles.backButtonText}>Go Back</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+  
+  return (
+    <JourneyProvider 
+      initialStops={processedStops} 
+      initialDestinationIndex={destinationIndex}
+    >
+      <JourneyTrackingContent 
+        routeNumber={routeNumber as string} 
+        stopName={stopName as string}
+        userLat={userLat as string}
+        userLng={userLng as string}
+      />
+    </JourneyProvider>
   );
+}
+
+// Inner component that consumes the JourneyContext
+function JourneyTrackingContent({ 
+  routeNumber, 
+  stopName,
+  userLat,
+  userLng
+}: { 
+  routeNumber: string; 
+  stopName: string;
+  userLat?: string;
+  userLng?: string;
+}) {
+  // Use the journey context
+  const {
+    stops,
+    currentStopIndex,
+    destinationIndex,
+    currentLocation,
+    setCurrentLocation,
+    progressToNextStop,
+    journeyStatus,
+    setJourneyStatus,
+    tappyState,
+    setTappyState,
+    isAlarmTriggered,
+    setIsAlarmTriggered,
+    busArrivals,
+    setBusArrivals,
+    loadingArrivals,
+    setLoadingArrivals,
+    showArrivals,
+    setShowArrivals,
+    updateCurrentPosition
+  } = useJourney();
   
-  // We'll always start at index 0 since we're slicing the stops array
-  const [startingStopIndex, setStartingStopIndex] = useState(0);
-  
-  // Use the unified haversineDistance function from geospatialUtils
-  // This ensures consistent distance calculations across the entire application
-  // Note: haversineDistance returns distance in kilometers, so we multiply by 1000 for meters when needed
+  // State for permissions and app state
+  const [locationPermission, setLocationPermission] = useState(true);
+  const [gpsError, setGpsError] = useState(false);
+  const [notificationPermission, setNotificationPermission] = useState(false);
+  const appState = useRef(AppState.currentState);
+  const notificationListener = useRef<Notifications.Subscription>();
+  const responseListener = useRef<Notifications.Subscription>();
 
   // Function to fetch bus arrivals for the current stop
   const fetchBusArrivals = async (busStopCode: string) => {
@@ -108,48 +203,6 @@ export default function JourneyTrackingScreen() {
     }
   };
 
-  // Process the stops array when originalStops changes
-  useEffect(() => {
-    if (!originalStops || originalStops.length === 0) return;
-    
-    // Find the closest stop index from the passed parameter or use 0 as default
-    const closestIdx = closestStopIndex ? parseInt(closestStopIndex as string, 10) : 0;
-    
-    // Validate the index
-    if (closestIdx >= 0 && closestIdx < originalStops.length) {
-      // Store the original index for reference
-      setOriginalClosestStopIndex(closestIdx);
-      
-      // Find the destination index in the original stops array
-      const originalDestinationIndex = originalStops.findIndex(stop => stop.id === stopId);
-      
-      // Slice the stops array to start from the closest stop and end at the destination
-      let slicedStops;
-      if (originalDestinationIndex !== -1 && originalDestinationIndex >= closestIdx) {
-        // If destination is valid and after the closest stop, slice from closest to destination (inclusive)
-        slicedStops = originalStops.slice(closestIdx, originalDestinationIndex + 1);
-        console.log(`[JourneyTracking] Sliced stops array from index ${closestIdx} to destination index ${originalDestinationIndex}, new length: ${slicedStops.length}`);
-      } else if (originalDestinationIndex !== -1 && originalDestinationIndex < closestIdx) {
-        // If destination is before the closest stop, we've already passed it - use only the closest stop
-        slicedStops = [originalStops[closestIdx]];
-        console.log(`[JourneyTracking] Destination already passed, using only closest stop at index ${closestIdx}`);
-      } else {
-        // If no valid destination, slice from closest stop to the end
-        slicedStops = originalStops.slice(closestIdx);
-        console.log(`[JourneyTracking] No valid destination, sliced stops array from index ${closestIdx}, new length: ${slicedStops.length}`);
-      }
-      
-      setStops(slicedStops);
-      
-      // Reset current stop index to 0 since we've sliced the array
-      setCurrentStopIndex(0);
-    } else {
-      // If invalid index, use the full array
-      setStops(originalStops);
-      console.log('[JourneyTracking] Using full stops array, length:', originalStops.length);
-    }
-  }, [originalStops, closestStopIndex]);
-  
   // Initialize location service and set up journey tracking
   useEffect(() => {
     // Function to get the user's current location for tracking purposes
@@ -161,8 +214,8 @@ export default function JourneyTrackingScreen() {
         let userLocation;
         if (userLat && userLng) {
           userLocation = {
-            latitude: parseFloat(userLat as string),
-            longitude: parseFloat(userLng as string)
+            latitude: parseFloat(userLat),
+            longitude: parseFloat(userLng)
           };
           console.log('[JourneyTracking] Using passed user location:', userLocation);
         } else {
@@ -170,11 +223,13 @@ export default function JourneyTrackingScreen() {
           console.log('[JourneyTracking] Using current user location:', userLocation);
         }
         
-        // Set the current location for tracking purposes
+        // Update the current location in the context
         setCurrentLocation(userLocation);
         
-        // Since we've already sliced the stops array, we're always starting at index 0
-        setCurrentStopIndex(0);
+        // Update the position which will calculate progress
+        updateCurrentPosition(userLocation);
+        
+        // Log journey information
         console.log('[JourneyTracking] Starting journey from index 0 (closest stop):', stops[0]?.name);
         
         // If we have a valid destination, log it
@@ -185,7 +240,7 @@ export default function JourneyTrackingScreen() {
                     'ID:', stops[destinationIndex]?.id);
         }
         
-        // Since we're at the first stop in the route (after slicing), fetch bus arrivals
+        // Since we're at the first stop in the route, fetch bus arrivals
         if (stops.length > 0 && stops[0] && stops[0].id) {
           fetchBusArrivals(stops[0].id);
           setShowArrivals(true);
@@ -196,7 +251,6 @@ export default function JourneyTrackingScreen() {
       }
     };
     
-
     // Initialize location service and notifications
   
     const initServices = async () => {
@@ -260,7 +314,7 @@ export default function JourneyTrackingScreen() {
       }
       subscription.remove();
     };
-  }, [stops, startingStopIndex]);
+  }, [stops]);
   
   // Handle app state changes (foreground/background)
   const handleAppStateChange = (nextAppState: AppStateStatus) => {
@@ -290,144 +344,51 @@ export default function JourneyTrackingScreen() {
     
     let stopCheckInterval: NodeJS.Timeout;
     const unsubscribe = locationService.watchLocation((location) => {
-      // Store current location for UI updates
-      setCurrentLocation({
+      // Use the updateCurrentPosition function from the context
+      // This will handle all the progress calculations and state updates
+      updateCurrentPosition({
         latitude: location.latitude,
         longitude: location.longitude
       });
       
-      // Check which stop we're closest to
-      if (stops.length > 0) {
-        // Use the unified findClosestStop function from geospatialUtils
-        // This ensures consistent location matching logic across the entire application
-        // Use the spatial index for faster lookup
-        const { closestStopIndex: foundIndex, closestStop } = findClosestStop(
-          location.latitude,
-          location.longitude,
-          stops,
-          5 // Use a larger threshold (5km) for tracking since we're already on the route
-        );
-        
-        // Log the closest stop details for debugging
-        if (foundIndex !== -1 && closestStop) {
-          console.log('[JourneyTracking] Current closest stop:', stops[foundIndex]?.name, 
-                      'Distance:', closestStop.distance.toFixed(2) + 'km');
+      // If we're at the first stop, show arrivals
+      if (currentStopIndex === 0 && !showArrivals) {
+        setShowArrivals(true);
+        // Fetch bus arrivals for the first stop
+        if (stops[0] && stops[0].id) {
+          fetchBusArrivals(stops[0].id);
         }
-        
-        // Find closest stop
-        const closestStopIndex = foundIndex !== -1 ? foundIndex : currentStopIndex;
-        
-        // We're always starting at index 0 since we sliced the array
-        // Don't go backward in the route - only move forward
-        if (closestStopIndex > currentStopIndex) {
-          setCurrentStopIndex(closestStopIndex);
-        }
-        
-        // Calculate distance to next stop (in meters)
-        const nextStopIndex = Math.min(closestStopIndex + 1, stops.length - 1);
-        
-        // Make sure the next stop exists and has coordinates before calculating distance
-        let distanceToNextStop = 0;
-        if (nextStopIndex < stops.length && stops[nextStopIndex] && 
-            stops[nextStopIndex].coordinates && 
-            stops[nextStopIndex].coordinates.latitude !== undefined && 
-            stops[nextStopIndex].coordinates.longitude !== undefined) {
-          // Use haversineDistance for consistent calculations (returns km, so multiply by 1000 for meters)
-          distanceToNextStop = haversineDistance(
-            location.latitude,
-            location.longitude,
-            stops[nextStopIndex].coordinates.latitude,
-            stops[nextStopIndex].coordinates.longitude
-          ) * 1000;
-        }
-        
-        // Calculate distance to destination stop (in meters)
-        let distanceToDestination = 0;
-        if (destinationIndex >= 0 && destinationIndex < stops.length && 
-            stops[destinationIndex] && stops[destinationIndex].coordinates && 
-            stops[destinationIndex].coordinates.latitude !== undefined && 
-            stops[destinationIndex].coordinates.longitude !== undefined) {
-          distanceToDestination = haversineDistance(
-            location.latitude,
-            location.longitude,
-            stops[destinationIndex].coordinates.latitude,
-            stops[destinationIndex].coordinates.longitude
-          ) * 1000;
-        }
-        
-        // Calculate partial progress between current stop and next stop
-        if (closestStopIndex < stops.length - 1 && 
-            closestStopIndex >= 0 && nextStopIndex >= 0 && 
-            closestStopIndex < stops.length && nextStopIndex < stops.length && 
-            stops[closestStopIndex] && stops[nextStopIndex] && 
-            stops[closestStopIndex].coordinates && stops[nextStopIndex].coordinates &&
-            stops[closestStopIndex].coordinates.latitude && stops[closestStopIndex].coordinates.longitude &&
-            stops[nextStopIndex].coordinates.latitude && stops[nextStopIndex].coordinates.longitude) {
-          // Calculate the total distance between the current stop and the next stop
-          const distanceBetweenStops = haversineDistance(
-            stops[closestStopIndex].coordinates.latitude,
-            stops[closestStopIndex].coordinates.longitude,
-            stops[nextStopIndex].coordinates.latitude,
-            stops[nextStopIndex].coordinates.longitude
-          ) * 1000; // Convert to meters
-          
-          // Calculate the distance traveled from the current stop towards the next stop
-          // This is the key calculation: total segment length minus remaining distance
-          const distanceTraveled = Math.max(0, distanceBetweenStops - distanceToNextStop);
-          
-          // Calculate progress as a percentage of the total potential distance
-          // This represents how far along the segment the user has traveled
-          // The total potential green is the full length between stops
-          const progress = Math.max(0, Math.min(100, (distanceTraveled / distanceBetweenStops) * 100));
-          
-          // If we're at the first stop, show arrivals
-          if (closestStopIndex === 0) {
-            if (!showArrivals) {
-              setShowArrivals(true);
-              // Fetch bus arrivals for the first stop
-              if (stops[closestStopIndex] && stops[closestStopIndex].id) {
-                const busStopCode = stops[closestStopIndex].id;
-                fetchBusArrivals(busStopCode);
-              }
-            }
-          } else {
-            setShowArrivals(false);
-          }
-          
-          console.log(
-            `[JourneyTracking] Progress calculation:\n` +
-            `  - Current stop: ${stops[closestStopIndex].name}\n` +
-            `  - Next stop: ${stops[nextStopIndex].name}\n` +
-            `  - Total segment length: ${distanceBetweenStops.toFixed(2)}m\n` +
-            `  - Distance remaining to next: ${distanceToNextStop.toFixed(2)}m\n` +
-            `  - Distance traveled in segment: ${distanceTraveled.toFixed(2)}m\n` +
-            `  - Progress percentage: ${progress.toFixed(2)}%`
-          );
-          
-          // Set the partial progress which will be used by the MapWeb component
-          // to render the green progress bar between stops
-          setPartialProgress(progress);
-        }
-        
-        // Update current stop if it's changed
-        if (closestStopIndex !== currentStopIndex) {
-          setCurrentStopIndex(closestStopIndex);
-        }
-        
-        // Update journey status based on distance to next stop and destination
-        updateJourneyStatus(closestStopIndex, distanceToNextStop, distanceToDestination);
+      } else if (currentStopIndex > 0 && showArrivals) {
+        setShowArrivals(false);
       }
+      
+      // Update journey status based on current position
+      updateJourneyStatus();
     });
     
-    // Function to update journey status based on real distances
-    const updateJourneyStatus = (stopIndex: number, distanceToNext: number, distanceToDestination: number) => {
+    // Function to update journey status based on current state
+    const updateJourneyStatus = () => {
+      if (!currentLocation) return;
+      
+      // Calculate distance to destination stop (in meters)
+      let distanceToDestination = 0;
+      if (destinationIndex >= 0 && destinationIndex < stops.length && 
+          stops[destinationIndex]?.coordinates) {
+        distanceToDestination = haversineDistance(
+          currentLocation.latitude,
+          currentLocation.longitude,
+          stops[destinationIndex].coordinates.latitude,
+          stops[destinationIndex].coordinates.longitude
+        ) * 1000; // Convert to meters
+      }
+      
       // Two stops before destination or within 500m of destination - alert that we're approaching
-      if (stopIndex === destinationIndex - 2 || (stopIndex === destinationIndex - 1 && distanceToDestination < 500)) {
+      if (currentStopIndex === destinationIndex - 2 || (currentStopIndex === destinationIndex - 1 && distanceToDestination < 500)) {
         setTappyState('alert');
         setJourneyStatus(`${stops[destinationIndex].name} is coming up! Get ready to alight!`);
       } 
       // At destination stop or very close to it (within 100m) - trigger alarm
-      else if ((stopIndex === destinationIndex || distanceToDestination < 100) && !isAlarmTriggered) {
+      else if ((currentStopIndex === destinationIndex || distanceToDestination < 100) && !isAlarmTriggered) {
         // Trigger alarm with notification
         if (notificationPermission) {
           notificationService.scheduleAlarmNotification(stops[destinationIndex].name);
@@ -435,43 +396,36 @@ export default function JourneyTrackingScreen() {
         setIsAlarmTriggered(true);
       }
       // Normal journey progress - keep Tappy sleeping
-      else if (stopIndex < stops.length - 1) {
+      else if (currentStopIndex < stops.length - 1) {
         // Always maintain sleeping state during normal journey
         setTappyState('sleeping');
         
-        // Calculate stops remaining - only count the stops that are actually visible to the user
-        const stopsRemaining = destinationIndex - stopIndex;
-        
-        // Format distance for display
-        const formattedDistance = distanceToNext < 1000 ? 
-          `${Math.round(distanceToNext)}m` : 
-          `${(distanceToNext / 1000).toFixed(1)}km`;
+        // Calculate stops remaining
+        const stopsRemaining = destinationIndex - currentStopIndex;
         
         // Use singular or plural form based on the number of stops
         const stopText = stopsRemaining === 1 ? "1 stop away" : `${stopsRemaining} stops away`;
+        
+        // Get the next stop name
+        const nextStopIndex = Math.min(currentStopIndex + 1, stops.length - 1);
+        const nextStopName = stops[nextStopIndex]?.name || 'next stop';
           
-        setJourneyStatus(`Approaching: ${stops[stopIndex + 1].name} (${stopText})`);
+        setJourneyStatus(`Approaching: ${nextStopName} (${stopText})`);
       }
     };
     
-    // Haversine formula to calculate distance between two points in meters
-    // Using the unified haversineDistance function from geospatialUtils.ts
-    // Note: haversineDistance returns distance in kilometers, so we multiply by 1000 for meters
-    
-    // Set up a more efficient interval for checking stops
-    // This helps reduce the computational load while still maintaining accuracy
+    // Set up a periodic check for journey status updates
     stopCheckInterval = setInterval(() => {
-      // Only perform intensive calculations if we have a valid location
-      if (currentLocation && currentLocation.latitude && currentLocation.longitude) {
-        console.log('[JourneyTracking] Periodic stop check with current location:', currentLocation);
+      if (currentLocation) {
+        updateJourneyStatus();
       }
-    }, 10000); // Check every 10 seconds as a backup to the location updates
+    }, 10000); // Check every 10 seconds
     
     return () => {
       unsubscribe();
       if (stopCheckInterval) clearInterval(stopCheckInterval);
     };
-  }, [locationPermission, currentStopIndex, destinationIndex, isAlarmTriggered, stops]);
+  }, [locationPermission, currentStopIndex, destinationIndex, isAlarmTriggered, stops, currentLocation]);
   
   // Update journey status based on current position
   useEffect(() => {
@@ -521,30 +475,7 @@ export default function JourneyTrackingScreen() {
   
   // Test functionality removed
   
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <LoadingIndicator fullscreen message="Preparing your journey..." />
-      </SafeAreaView>
-    );
-  }
-  
-  if (error || stops.length === 0) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.errorView}>
-          <Text style={styles.errorTitle}>Could not load route information</Text>
-          <Text style={styles.errorSubtext}>Please try again later</Text>
-          <TouchableOpacity 
-            style={styles.backButtonLarge}
-            onPress={() => router.back()}
-          >
-            <Text style={styles.backButtonText}>Go Back</Text>
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
-    );
-  }
+  // We don't need loading and error checks here since they're handled in the parent component
   
   return (
     <SafeAreaView style={styles.container}>
@@ -578,13 +509,8 @@ export default function JourneyTrackingScreen() {
         
         {/* Map with route visualization */}
         <View style={styles.mapContainer}>
-          <MapProgressBar 
-            stops={stops}
-            currentStopIndex={currentStopIndex}
-            destinationStopIndex={destinationIndex}
-            partialProgress={partialProgress}
-            currentLocation={currentLocation || undefined}
-          />
+          {/* MapProgressBar now uses JourneyContext by default */}
+          <MapProgressBar />
           
           {/* Bus Arrivals Panel - Only shown when at the first stop */}
           {showArrivals && currentStopIndex === 0 && (

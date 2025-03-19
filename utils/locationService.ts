@@ -5,10 +5,20 @@ interface Coordinates {
   longitude: number;
 }
 
+interface CachedLocation {
+  coordinates: Coordinates;
+  timestamp: number;
+}
+
 let currentLocationSubscribers: ((location: Coordinates) => void)[] = [];
+let locationCache: CachedLocation | null = null;
+const CACHE_TTL_MS = 30000; // 1 minute cache TTL
 
 // Default location (Singapore) for fallback
-const DEFAULT_LOCATION: Coordinates = { latitude: 1.3521, longitude: 103.8198 };
+const DEFAULT_LOCATION: Coordinates = {
+  latitude: 1.3521,
+  longitude: 103.8198
+};
 
 // Real location service without mock functionality
 export const locationService = {
@@ -27,32 +37,57 @@ export const locationService = {
     }
   },
 
-  // Get current location with high accuracy
+  // Get current location with high accuracy and caching
   async getCurrentLocation(): Promise<Coordinates> {
     try {
-      const { status } = await Location.getForegroundPermissionsAsync();
-      
-      if (status !== 'granted') {
-        console.log('Location permission not granted, using default location');
-        return DEFAULT_LOCATION;
+      // Check if we have a valid cached location
+      const now = Date.now();
+      if (locationCache && (now - locationCache.timestamp < CACHE_TTL_MS)) {
+        console.log('Using cached location from', new Date(locationCache.timestamp));
+        
+        // Fetch a new location in the background to update the cache
+        this.updateLocationCache().catch(err => {
+          console.error('Background location update failed:', err);
+        });
+        
+        return locationCache.coordinates;
       }
       
-      // Get the actual device location with high accuracy
-      const location = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High
-      });
-      
-      const coordinates = {
-        latitude: location.coords.latitude,
-        longitude: location.coords.longitude
-      };
-      
-      console.log('Got actual device location:', coordinates);
-      return coordinates;
+      // No valid cache, get a fresh location
+      return await this.updateLocationCache();
     } catch (error) {
       console.error('Error getting location:', error);
+      return locationCache?.coordinates || DEFAULT_LOCATION;
+    }
+  },
+  
+  // Helper method to update the location cache
+  async updateLocationCache(): Promise<Coordinates> {
+    const { status } = await Location.getForegroundPermissionsAsync();
+    
+    if (status !== 'granted') {
+      console.log('Location permission not granted, using default location');
       return DEFAULT_LOCATION;
     }
+    
+    // Get the actual device location with high accuracy
+    const location = await Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.BestForNavigation
+    });
+    
+    const coordinates = {
+      latitude: location.coords.latitude,
+      longitude: location.coords.longitude
+    };
+    
+    // Update the cache
+    locationCache = {
+      coordinates,
+      timestamp: Date.now()
+    };
+    
+    console.log('Updated location cache:', coordinates);
+    return coordinates;
   },
 
   // Watch location changes with optimized settings for transit tracking
@@ -81,7 +116,7 @@ export const locationService = {
       // Start watching with optimized settings for transit tracking
       Location.watchPositionAsync(
         { 
-          accuracy: Location.Accuracy.High, 
+          accuracy: Location.Accuracy.BestForNavigation, 
           timeInterval: 3000,  // Update every 3 seconds
           distanceInterval: 5  // Update after moving 5 meters
         },
@@ -89,6 +124,11 @@ export const locationService = {
           const location = {
             latitude: position.coords.latitude,
             longitude: position.coords.longitude,
+          };
+          // Update the cache with the latest location
+          locationCache = {
+            coordinates: location,
+            timestamp: Date.now()
           };
           console.log('Location update:', location);
           callback(location);

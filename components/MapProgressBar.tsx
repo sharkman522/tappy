@@ -1,9 +1,11 @@
 import React from 'react';
 import { View, StyleSheet } from 'react-native';
 import MapWeb from './MapWeb';
+import { useJourney } from '@/context/JourneyContext';
 
 interface MapProgressBarProps {
-  stops: Array<{
+  // Optional props to override context values if needed
+  stops?: Array<{
     id: string;
     name: string;
     coordinates: {
@@ -11,9 +13,9 @@ interface MapProgressBarProps {
       longitude: number;
     };
   }>;
-  currentStopIndex: number;
-  destinationStopIndex: number;
-  partialProgress?: number; // Progress between current and next stop (0-100)
+  currentStopIndex?: number;
+  destinationStopIndex?: number;
+  partialProgress?: number;
   currentLocation?: {
     latitude: number;
     longitude: number;
@@ -21,9 +23,27 @@ interface MapProgressBarProps {
 }
 
 export default function MapProgressBar(props: MapProgressBarProps) {
+  // Use the journey context
+  const {
+    stops: contextStops,
+    currentStopIndex: contextCurrentStopIndex,
+    destinationIndex: contextDestinationIndex,
+    progressToNextStop: contextProgress,
+    currentLocation: contextCurrentLocation
+  } = useJourney();
+  
+  // Merge props with context values, prioritizing props if provided
+  const mergedProps = {
+    stops: props.stops || contextStops,
+    currentStopIndex: props.currentStopIndex !== undefined ? props.currentStopIndex : contextCurrentStopIndex,
+    destinationStopIndex: props.destinationStopIndex !== undefined ? props.destinationStopIndex : contextDestinationIndex,
+    partialProgress: props.partialProgress !== undefined ? props.partialProgress : contextProgress,
+    currentLocation: props.currentLocation || contextCurrentLocation
+  };
+  
   return (
     <View style={styles.container}>
-      <MapWeb {...props} />
+      <MapWeb {...mergedProps} />
     </View>
   );
 }

@@ -97,20 +97,20 @@ export default function RouteDetailsScreen() {
         const userLocation = await locationService.getCurrentLocation();
         console.log('[RouteDetailsScreen] User location:', userLocation);
         
-        // Use the unified findClosestStop function from geospatialUtils with 2km max distance threshold
-        // Increased from 1km to 2km to make it more likely to find a nearby stop
+        // Use the unified findClosestStop function from geospatialUtils with 5km max distance threshold
+        // Increased from 2km to 5km to make it more likely to find a nearby stop on the route
         const { closestStop, closestStopIndex, stopsWithDistance: updatedStopsWithDistance } = findClosestStop(
           userLocation.latitude,
           userLocation.longitude,
           stops,
-          2 // 2km max distance threshold
+          5 // 5km max distance threshold
         );
         
         // Store the updated stops with distance information
         setStopsWithDistance(updatedStopsWithDistance);
         
         if (closestStopIndex === -1) {
-          console.log('[RouteDetailsScreen] No stops within 2km of user location');
+          console.log('[RouteDetailsScreen] No stops within 5km of user location');
           setClosestStopIndex(-1);
           setTappyMessage(`Where would you like to go? (No stops nearby)`); 
         } else {
@@ -238,7 +238,8 @@ export default function RouteDetailsScreen() {
       const userLocation = await locationService.getCurrentLocation();
       console.log('[RouteDetailsScreen] User location for journey:', userLocation);
       
-      // Find the closest stop to use as the starting point
+      // Find the closest stop within the route to use as the starting point
+      // We're using the same stops array that's already filtered for the route
       const { closestStop, closestStopIndex } = findClosestStop(
         userLocation.latitude,
         userLocation.longitude,
@@ -246,7 +247,7 @@ export default function RouteDetailsScreen() {
         5 // 5km threshold
       );
       
-      // Prepare params with closest stop information
+      // Prepare params with destination stop information
       const params: Record<string, string> = { 
         routeId: routeId as string, 
         routeNumber: routeNumber as string, 
@@ -257,16 +258,17 @@ export default function RouteDetailsScreen() {
       };
       
       // Add closest stop information if found
+      // This will be the first stop in the journey
       if (closestStopIndex !== -1 && closestStop) {
         params.closestStopId = stops[closestStopIndex].id;
         params.closestStopIndex = closestStopIndex.toString();
         params.closestStopDistance = closestStop.distance.toString();
-        console.log('[RouteDetailsScreen] Found closest stop:', 
+        console.log('[RouteDetailsScreen] Found closest stop within route:', 
                     'Index:', closestStopIndex, 
                     'Name:', stops[closestStopIndex]?.name,
                     'Distance:', closestStop.distance.toFixed(2) + 'km');
       } else {
-        console.log('[RouteDetailsScreen] No close stops found within threshold');
+        console.log('[RouteDetailsScreen] No close stops found within route');
       }
       
       // Navigate to journey screen with all parameters
