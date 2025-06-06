@@ -29,8 +29,11 @@
         "UIBackgroundModes": [
           "audio",
           "fetch",
-          "remote-notification"
-        ]
+          "remote-notification",
+          "location"
+        ],
+        "NSLocationWhenInUseUsageDescription": "This app uses your location to find nearby bus stops and track your journey progress.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "This app uses your location in the background to track your journey progress and notify you when you're approaching your stop."
       }
     },
     "web": {
@@ -48,7 +51,10 @@
         "VIBRATE",
         "RECEIVE_BOOT_COMPLETED",
         "SCHEDULE_EXACT_ALARM",
-        "USE_FULL_SCREEN_INTENT"
+        "USE_FULL_SCREEN_INTENT",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION"
       ]
     },
     "experiments": {

@@ -20,6 +20,11 @@ const DEFAULT_LOCATION: Coordinates = {
   longitude: 103.8198
 };
 
+// Global subscription for continuous background location updates
+let globalWatchSubscription: Location.LocationSubscription | null = null;
+let globalFallbackInterval: NodeJS.Timeout | null = null;
+let isBackgroundLocationRunning = false;
+
 // Real location service without mock functionality
 export const locationService = {
   // Initialize location services and request permissions
@@ -30,30 +35,128 @@ export const locationService = {
         console.log('Location permission denied');
         return false;
       }
+      
+      // Start the background location updates immediately after initialization
+      this.startBackgroundLocationUpdates();
       return true;
     } catch (error) {
       console.error('Error initializing location service:', error);
       return false;
     }
   },
+  
+  // Start continuous background location updates
+  startBackgroundLocationUpdates(): void {
+    // Don't start if already running
+    if (isBackgroundLocationRunning) {
+      console.log('Background location updates already running');
+      return;
+    }
+    
+    console.log('Starting background location updates');
+    isBackgroundLocationRunning = true;
+    
+    Location.getForegroundPermissionsAsync().then(({ status }) => {
+      if (status !== 'granted') {
+        console.log('Location permission denied for background updates, using default');
+        // Use interval with default location as fallback
+        globalFallbackInterval = setInterval(() => {
+          // Update the cache with default location
+          locationCache = {
+            coordinates: DEFAULT_LOCATION,
+            timestamp: Date.now()
+          };
+          
+          // Notify all subscribers
+          currentLocationSubscribers.forEach(callback => {
+            callback(DEFAULT_LOCATION);
+          });
+        }, 3000);
+        return;
+      }
+      
+      // Start watching with optimized settings for transit tracking
+      Location.watchPositionAsync(
+        { 
+          accuracy: Location.Accuracy.BestForNavigation, 
+          timeInterval: 3000,  // Update every 3 seconds
+          distanceInterval: 5  // Update after moving 5 meters
+        },
+        (position) => {
+          const location = {
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+          };
+          
+          // Update the cache with the latest location
+          locationCache = {
+            coordinates: location,
+            timestamp: Date.now()
+          };
+          
+          console.log('Background location update:', location);
+          
+          // Notify all subscribers
+          currentLocationSubscribers.forEach(callback => {
+            callback(location);
+          });
+        }
+      ).then(subscription => {
+        globalWatchSubscription = subscription;
+      }).catch(error => {
+        console.error('Error setting up background location watching:', error);
+        // Fallback to interval with default location
+        globalFallbackInterval = setInterval(() => {
+          // Update the cache with default location
+          locationCache = {
+            coordinates: DEFAULT_LOCATION,
+            timestamp: Date.now()
+          };
+          
+          // Notify all subscribers
+          currentLocationSubscribers.forEach(callback => {
+            callback(DEFAULT_LOCATION);
+          });
+        }, 3000);
+      });
+    });
+  },
+  
+  // Stop background location updates
+  stopBackgroundLocationUpdates(): void {
+    console.log('Stopping background location updates');
+    
+    if (globalWatchSubscription) {
+      globalWatchSubscription.remove();
+      globalWatchSubscription = null;
+    }
+    
+    if (globalFallbackInterval) {
+      clearInterval(globalFallbackInterval);
+      globalFallbackInterval = null;
+    }
+    
+    isBackgroundLocationRunning = false;
+  },
 
   // Get current location with high accuracy and caching
   async getCurrentLocation(): Promise<Coordinates> {
     try {
+      // Start background updates if not already running
+      if (!isBackgroundLocationRunning) {
+        this.startBackgroundLocationUpdates();
+      }
+      
       // Check if we have a valid cached location
       const now = Date.now();
       if (locationCache && (now - locationCache.timestamp < CACHE_TTL_MS)) {
         console.log('Using cached location from', new Date(locationCache.timestamp));
-        
-        // Fetch a new location in the background to update the cache
-        this.updateLocationCache().catch(err => {
-          console.error('Background location update failed:', err);
-        });
-        
         return locationCache.coordinates;
       }
       
-      // No valid cache, get a fresh location
+      // No valid cache, get a fresh location directly
+      // This should rarely happen since background updates should keep the cache fresh
+      console.log('No valid cached location, getting fresh location');
       return await this.updateLocationCache();
     } catch (error) {
       console.error('Error getting location:', error);
@@ -94,70 +197,24 @@ export const locationService = {
   watchLocation(callback: (location: Coordinates) => void): () => void {
     // Add to subscribers list
     currentLocationSubscribers.push(callback);
-
-    // Set up real location tracking
-    let watchSubscription: Location.LocationSubscription | null = null;
-    let fallbackInterval: NodeJS.Timeout | null = null;
     
-    // Start watching position with appropriate settings for transit tracking
-    // - timeInterval: 3000ms (3s) for more frequent updates
-    // - distanceInterval: 5m to detect smaller movements
-    // - accuracy: High for better precision
-    Location.requestForegroundPermissionsAsync().then(({ status }) => {
-      if (status !== 'granted') {
-        console.log('Location permission denied for watching, using default');
-        // Use interval with default location as fallback
-        fallbackInterval = setInterval(() => {
-          callback(DEFAULT_LOCATION);
-        }, 3000);
-        return;
-      }
-      
-      // Start watching with optimized settings for transit tracking
-      Location.watchPositionAsync(
-        { 
-          accuracy: Location.Accuracy.BestForNavigation, 
-          timeInterval: 3000,  // Update every 3 seconds
-          distanceInterval: 5  // Update after moving 5 meters
-        },
-        (position) => {
-          const location = {
-            latitude: position.coords.latitude,
-            longitude: position.coords.longitude,
-          };
-          // Update the cache with the latest location
-          locationCache = {
-            coordinates: location,
-            timestamp: Date.now()
-          };
-          console.log('Location update:', location);
-          callback(location);
-        }
-      ).then(subscription => {
-        watchSubscription = subscription;
-      }).catch(error => {
-        console.error('Error setting up location watching:', error);
-        // Fallback to interval with default location
-        fallbackInterval = setInterval(() => {
-          callback(DEFAULT_LOCATION);
-        }, 3000);
-      });
-    });
+    // Make sure background location updates are running
+    if (!isBackgroundLocationRunning) {
+      this.startBackgroundLocationUpdates();
+    }
+    
+    // If we have a current location, immediately call the callback
+    if (locationCache) {
+      // Use setTimeout to make this async
+      setTimeout(() => {
+        callback(locationCache!.coordinates);
+      }, 0);
+    }
     
     // Return unsubscribe function
     return () => {
       // Remove from subscribers list
       currentLocationSubscribers = currentLocationSubscribers.filter(sub => sub !== callback);
-      
-      // Clean up location watching
-      if (watchSubscription) {
-        watchSubscription.remove();
-      }
-      
-      // Clean up fallback interval if it exists
-      if (fallbackInterval) {
-        clearInterval(fallbackInterval);
-      }
     };
   },
 

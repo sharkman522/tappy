@@ -31,8 +31,11 @@ export default function MapWeb(props: MapWebProps) {
   // Track the highest progress values to prevent reversal
   const [highestProgress, setHighestProgress] = React.useState(0);
   const [highestVerticalProgress, setHighestVerticalProgress] = React.useState<{[key: string]: number}>({});
-  // Show all stops in the route, not just from current to destination
+  // Show all stops in the route
   const visibleStops = stops;
+  
+  // Reference to the current stop for scrolling
+  const currentStopRef = React.useRef<View | null>(null);
   // Create a ref for the ScrollView
   const scrollViewRef = React.useRef<ScrollView>(null);
   // Create refs for each stop item to measure their positions
@@ -44,12 +47,15 @@ export default function MapWeb(props: MapWebProps) {
   }, [visibleStops.length]);
   // Determine which stops are passed, current, next, or upcoming
   const getStopStatus = (index: number) => {
+    // Calculate the actual stop index in the full stops array
+    const actualStopIndex = currentStopIndex + index;
+    
     // Check if this stop is before the current stop (passed)
-    if (index < currentStopIndex) return 'passed';
+    if (actualStopIndex < currentStopIndex) return 'passed';
     // Check if this is the current stop
-    if (index === currentStopIndex) return 'current';
-    // Check if this is the destination stop
-    if (index === destinationStopIndex) return 'destination';
+    if (actualStopIndex === currentStopIndex) return 'current';
+    // Check if this is the destination stop (last stop in the route)
+    if (actualStopIndex === stops.length - 1) return 'destination';
     // Otherwise it's an upcoming stop
     return 'upcoming';
   };
@@ -103,11 +109,18 @@ export default function MapWeb(props: MapWebProps) {
     // Base progress is proportional to overall journey progress
     let connectorProgress = 0;
     
-    // If we're past this connector, it's 100% filled
+    // If this is a past stop (before the current stop), it's 100% filled
     if (stopIndex < currentStopIndex) {
+      // All previous stops should be 100% filled
       connectorProgress = 100;
+      console.log(`[MapWeb] Connector ${stopIndex} is a past stop, setting to 100%`);
     }
-    // If we're at the stop just before this connector, show partial progress
+    // If this is the current stop's connector, it's also 100% filled
+    else if (stopIndex === currentStopIndex) {
+      connectorProgress = 100;
+      console.log(`[MapWeb] Connector ${stopIndex} is the current stop, setting to 100%`);
+    }
+    // If we're at the stop just after the current stop, show partial progress
     else if (stopIndex === currentStopIndex + 1) {
       // Use the partial progress from props if available, otherwise calculate it
       if (partialProgress !== undefined) {
@@ -138,7 +151,7 @@ export default function MapWeb(props: MapWebProps) {
     return highest;
   };
 
-  // Scroll to the current stop when visibleStops changes
+  // Scroll to the current stop when visibleStops changes or currentStopIndex changes
   React.useEffect(() => {
     // Ensure we have a valid ScrollView
     if (scrollViewRef.current && visibleStops.length > 0) {
@@ -159,13 +172,14 @@ export default function MapWeb(props: MapWebProps) {
                 y: Math.max(0, y - 150), // Center in view with some offset
                 animated: true,
               });
+              console.log(`[MapWeb] Scrolling to current stop: ${stops[currentStopIndex]?.name}`);
             },
             () => console.log('Failed to measure layout')
           );
         }
       }, 100);
     }
-  }, [visibleStops]);
+  }, [visibleStops, currentStopIndex, stops]);
 
   return (
     <View style={styles.container}>
@@ -189,14 +203,24 @@ export default function MapWeb(props: MapWebProps) {
             {visibleStops.map((stop, index) => {
               const status = getStopStatus(index);
               const color = getStopColor(status);
-              const isDestination = currentStopIndex + index === destinationStopIndex;
-              const isCurrent = index === 0; // First stop in visible stops is always current
+              // The destination is always the last stop in the route
+              const isDestination = index === stops.length - 1;
+              // The current stop is the one that matches the currentStopIndex from props
+              const isCurrent = index === currentStopIndex;
               
               return (
                 <View 
                   key={stop.id} 
                   style={styles.stopItem}
-                  ref={ref => stopRefs.current[index] = ref}>
+                  ref={ref => {
+                    // Store reference to all stops
+                    stopRefs.current[index] = ref;
+                    
+                    // Store special reference to current stop for scrolling
+                    if (isCurrent) {
+                      currentStopRef.current = ref;
+                    }
+                  }}>
                   {/* Connector line */}
                   {index > 0 && (
                     <>
@@ -268,10 +292,17 @@ export default function MapWeb(props: MapWebProps) {
                       </View>
                     )}
                     
-                    {/* Upcoming indicator - all non-current stops are upcoming */}
-                    {!isCurrent && !isDestination && (
+                    {/* Upcoming indicator - only show for future stops */}
+                    {!isCurrent && !isDestination && index > currentStopIndex && (
                       <Text style={styles.stopDetailText}>
                         Upcoming
+                      </Text>
+                    )}
+                    
+                    {/* Past stop indicator */}
+                    {index < currentStopIndex && (
+                      <Text style={[styles.stopDetailText, { color: '#9CA3AF' }]}>
+                        Passed
                       </Text>
                     )}
                   </View>
@@ -287,13 +318,13 @@ export default function MapWeb(props: MapWebProps) {
         <View style={styles.journeySummary}>
           <View style={styles.journeyPoint}>
             <MapPin size={16} color="#4BB377" />
-            <Text style={styles.journeyPointText}>{visibleStops[0]?.name || 'Current'}</Text>
+            <Text style={styles.journeyPointText}>{stops[currentStopIndex]?.name || 'Current'}</Text>
           </View>
           <ArrowRight size={16} color="#9CA3AF" />
           <View style={styles.journeyPoint}>
             <MapPin size={16} color="#FF8A65" />
             <Text style={[styles.journeyPointText, styles.destinationText]}>
-              {stops[destinationStopIndex]?.name || 'Destination'}
+              {stops[stops.length - 1]?.name || 'Destination'}
             </Text>
           </View>
         </View>
@@ -307,7 +338,7 @@ export default function MapWeb(props: MapWebProps) {
           />
         </View>
         <Text style={styles.progressText}>
-          1 of {destinationStopIndex - currentStopIndex + 1} stops
+          {currentStopIndex + 1} of {stops.length} stops
         </Text>
       </View>
     </View>
